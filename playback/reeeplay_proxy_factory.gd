@@ -135,3 +135,4 @@ static func _create_fallback_node(info: REEEplayEntityInfo, arch: REEEplayArchet
 	if info.archetype_id == &"Node":
 		return Node.new()
 	return Node3D.new()
+

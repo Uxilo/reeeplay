@@ -398,3 +398,4 @@ func _touch_lru(block_idx: int) -> void:
 			var evict_blk := blocks[evict_idx]
 			if evict_blk.file_offset >= 0:
 				evict_blk.ticks.clear()
+

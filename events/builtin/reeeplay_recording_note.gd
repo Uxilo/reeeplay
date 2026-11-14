@@ -40,3 +40,4 @@ func _deserialize(ser: REEEplaySerializer, _from_version: int) -> void:
 	title = ser.read_string()
 	body = ser.read_string()
 	author = ser.read_string()
+

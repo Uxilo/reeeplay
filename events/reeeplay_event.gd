@@ -123,3 +123,4 @@ func _import_script_data(data: Dictionary) -> void:
 		if _BASE_PROPS.has(pname):
 			continue
 		set(pname, data[key])
+

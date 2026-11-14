@@ -83,3 +83,4 @@ static func description(path: StringName) -> String:
 		if entry[0] == path:
 			return entry[4]
 	return ""
+

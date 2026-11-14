@@ -29,3 +29,4 @@ static func format_time(seconds: float) -> String:
 	if h > 0:
 		return "%d:%02d:%02d" % [h, m, s]
 	return "%d:%02d" % [m, s]
+

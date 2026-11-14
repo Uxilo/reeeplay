@@ -37,3 +37,4 @@ func find_channel(channel_name: StringName) -> REEEplayChannel:
 		if ch != null and ch.effective_name() == channel_name:
 			return ch
 	return null
+

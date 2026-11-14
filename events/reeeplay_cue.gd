@@ -19,3 +19,4 @@ func _on_playback_forward(_player: Node) -> void:
 ## Optional hook called when reverse playback crosses this cue's tick.
 func _on_playback_reverse(_player: Node) -> void:
 	pass
+

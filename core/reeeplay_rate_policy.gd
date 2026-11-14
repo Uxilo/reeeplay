@@ -141,3 +141,4 @@ func _eval_distance_divider(entity_pos: Variant, focus_pos: Variant, base_div: i
 	if dist <= far_distance:
 		return maxi(base_div, far_divider)
 	return maxi(base_div, culled_divider)
+

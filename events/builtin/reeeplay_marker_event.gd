@@ -32,3 +32,4 @@ func _serialize(ser: REEEplaySerializer) -> void:
 func _deserialize(ser: REEEplaySerializer, _from_version: int) -> void:
 	marker_name = ser.read_string()
 	color = ser.read_color()
+

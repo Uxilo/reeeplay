@@ -109,3 +109,4 @@ static func from_kind(preset_kind: Kind) -> REEEplayPreset:
 		_:
 			p.rate_policy = REEEplayRatePolicy.new()
 	return p
+

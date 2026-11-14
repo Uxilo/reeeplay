@@ -69,3 +69,4 @@ func _on_playback_forward(player_node: Node) -> void:
 			if is_instance_valid(instance):
 				instance.queue_free()
 		)
+

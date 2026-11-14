@@ -94,3 +94,4 @@ func _on_playback_forward(player_node: Node) -> void:
 		host.add_child(asp)
 		asp.finished.connect(asp.queue_free)
 		asp.play()
+

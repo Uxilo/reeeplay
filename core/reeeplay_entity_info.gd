@@ -83,3 +83,4 @@ func strip_pii() -> void:
 	metadata.erase("ip")
 	metadata.erase("email")
 	metadata.erase("account_id")
+

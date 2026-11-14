@@ -141,3 +141,4 @@ static func get_utf8(buf: StreamPeerBuffer, max_bytes: int = 16777216) -> String
 	if res[0] != OK:
 		return ""
 	return (res[1] as PackedByteArray).get_string_from_utf8()
+

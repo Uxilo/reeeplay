@@ -360,3 +360,4 @@ static func _encode_index(chunk_offsets: Dictionary[String, Dictionary], block_i
 		b.put_u32(int(bi["raw_size"]))
 		b.put_u16(int(bi["chunk_flags"]))
 	return b.data_array
+

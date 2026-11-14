@@ -71,3 +71,4 @@ static func _interpolate_skeleton_pose(a: Array, b: Array, alpha: float) -> Arra
 		else:
 			out[i] = a[i] if a[i] is Transform3D else Transform3D.IDENTITY
 	return out
+

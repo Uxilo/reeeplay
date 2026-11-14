@@ -69,3 +69,4 @@ func _find_manager() -> Node:
 	if not is_inside_tree():
 		return null
 	return get_tree().root.get_node_or_null("REEEplay")
+

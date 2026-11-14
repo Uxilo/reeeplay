@@ -21,3 +21,4 @@ func get_timeline_label() -> String:
 
 func get_timeline_color() -> Color:
 	return Color(0.6, 0.6, 0.6, 0.85)
+

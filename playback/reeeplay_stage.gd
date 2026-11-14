@@ -21,3 +21,4 @@ func clear_all() -> void:
 		child.queue_free()
 	for child in cue_root.get_children():
 		child.queue_free()
+
