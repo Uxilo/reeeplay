@@ -88,6 +88,7 @@ func _run_all() -> void:
 	_run_test("Manager + Session + 2D Stage + Tracked + Clock", _test_manager_session_and_2d)
 	_run_test("Editor Dock, Authoring & Inspector Plugin", _test_editor_dock_and_inspector)
 	_run_test("Demo Scene Record, Save/Load .reee & Playback", _test_demo_scene)
+	_run_test("Killcam + REEEplayDiff + Dock Timeline Tree", _test_killcam_diff_and_dock_timeline)
 
 	print("=== Results: %d passed, %d failed ===" % [_passed, _failures.size()])
 	for f in _failures:
@@ -834,6 +835,7 @@ func _test_demo_scene() -> void:
 	if demo._last_recording != null:
 		_assert(demo._last_recording.events.size() >= 5, "Premade sample should contain timeline events")
 		_assert(demo._last_recording.damage_log.entries.size() >= 3, "Premade sample should contain combat damage/heal entries")
+		_assert(demo.marker_row.get_child_count() >= 5, "Demo marker_row should render clickable timeline marker buttons")
 
 	# Record for 6 physics frames (~0.1s), then stop into replay mode.
 	demo._on_record_pressed()
@@ -866,3 +868,85 @@ func _test_demo_scene() -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_path))
 	root.remove_child(demo)
 	demo.free()
+
+
+func _test_killcam_diff_and_dock_timeline() -> void:
+	# 1. REEEplayDiff identical & divergent comparison
+	var sample_res := REEEplayReader.load_file("res://addons/reeeplay/demo/sample_playback.reee")
+	_assert(sample_res.error == REEEplayFormat.LoadError.OK and sample_res.recording != null, "Sample .reee should load for diff")
+	if sample_res.recording != null:
+		var same_diff := REEEplayDiff.compare(sample_res.recording, sample_res.recording)
+		_assert(same_diff.is_identical(), "Self-diff of sample_playback.reee should be identical")
+
+	var sess_a := REEEplaySession.new()
+	var sess_b := REEEplaySession.new()
+	var node_a := Node3D.new()
+	var node_b := Node3D.new()
+	var arch := REEEplayArchetype.new()
+	arch.archetype_id = &"DiffActor"
+	arch.channels = REEEplayChannelPresets.transform_3d()
+	sess_a.register_archetype(arch)
+	sess_b.register_archetype(arch)
+	sess_a.start_recording(REEEplayPreset.Kind.SINGLEPLAYER)
+	sess_b.start_recording(REEEplayPreset.Kind.SINGLEPLAYER)
+	var id_a := sess_a.track(node_a, &"DiffActor")
+	var id_b := sess_b.track(node_b, &"DiffActor")
+	for i in range(10):
+		node_a.position = Vector3(float(i), 0.0, 0.0)
+		node_b.position = Vector3(float(i) + (2.5 if i >= 5 else 0.0), 0.0, 0.0)
+		if i == 6:
+			sess_a.record_damage(id_a, id_a, 20.0, &"impact", "Self Hit")
+		sess_a.recorder.capture_tick()
+		sess_b.recorder.capture_tick()
+	var rec_a := sess_a.stop_recording()
+	var rec_b := sess_b.stop_recording()
+
+	var div_diff := REEEplayDiff.compare(rec_a, rec_b)
+	_assert(not div_diff.is_identical(), "Divergent recordings should not report identical")
+	_assert(div_diff.first_divergent_tick == 5, "First divergent tick should be 5 (got %d)" % div_diff.first_divergent_tick)
+	_assert(div_diff.max_position_drift >= 2.0, "Max position drift should be >= 2.0")
+
+	# 2. REEEplayKillcam
+	var kc_sess := REEEplaySession.new()
+	var kc_node := Node3D.new()
+	kc_sess.register_archetype(arch)
+	kc_sess.start_recording(REEEplayPreset.Kind.FUN_GAME)
+	var kc_id := kc_sess.track(kc_node, &"DiffActor", {"display_name": "Victim"})
+	for i in range(20):
+		kc_node.position = Vector3(float(i) * 0.2, 0.0, 0.0)
+		if i == 15:
+			kc_sess.record_environmental_damage(kc_id, 35.0, &"lava", "Pit")
+		kc_sess.recorder.capture_tick()
+	var kc_stage := REEEplayStage.new()
+	var kc := REEEplayKillcam.new()
+	root.add_child(kc_stage)
+	root.add_child(kc)
+	var kc_res := kc.play_killcam(kc_sess, kc_id, kc_stage, {"window_seconds": 1.0, "speed": 0.35})
+	_assert(kc_res.get("clip", null) != null, "Killcam should produce a sliced clip")
+	_assert(kc.player != null and is_equal_approx(kc.player.speed, 0.35), "Killcam should play at 0.35x slow-mo")
+	_assert(float(kc.last_recap.get("environmental_damage", 0.0)) >= 35.0, "Killcam recap should include environmental damage")
+	kc.stop_killcam()
+	kc_sess.stop_recording()
+
+	# 3. Dock Recordings Timeline Tree + Diff
+	var dock := REEEplayDock.new()
+	dock.persist = false
+	root.add_child(dock)
+	dock.inspect_file("res://addons/reeeplay/demo/sample_playback.reee")
+	_assert(dock._rec_event_tree != null and dock._rec_event_tree.get_root() != null, "Dock event tree should exist")
+	_assert(dock._rec_event_tree.get_root().get_child_count() >= 5, "Dock event tree should list sample_playback.reee events")
+	dock._on_diff_vs_sample()
+	_assert(dock._rec_output.text.contains("REEEplay Diff"), "Dock Diff vs Sample should output REEEplayDiff summary")
+
+	root.remove_child(dock)
+	dock.free()
+	root.remove_child(kc)
+	kc.free()
+	root.remove_child(kc_stage)
+	kc_stage.free()
+	kc_node.free()
+	kc_sess.free()
+	node_a.free()
+	node_b.free()
+	sess_a.free()
+	sess_b.free()

@@ -105,6 +105,11 @@ var _budget_label: RichTextLabel
 var _rec_picker: OptionButton
 var _rec_paths: Array[String] = []
 var _rec_output: RichTextLabel
+var _rec_event_filter: OptionButton
+var _rec_event_search: LineEdit
+var _rec_event_tree: Tree
+var _rec_inspected_info: Dictionary = {}
+var _rec_inspected_path: String = ""
 var _file_dialog: FileDialog
 
 # Tab 3: Settings
@@ -630,9 +635,50 @@ func _build_recordings_tab() -> Control:
 		"Rescan the configured replays directory."))
 	picker_row.add_child(_btn("Browse...", _on_browse_reee_file, &"Folder",
 		"Open any .reee file from disk."))
+	picker_row.add_child(_btn("Sample", _on_inspect_demo_sample, &"Play",
+		"Inspect the built-in demo sample_playback.reee."))
 	picker_row.add_child(_btn("Recover .part", _on_recover_part_files, &"Tools",
 		"Scan for leftover .reee.part partial files in the replays directory."))
 	browser_card.add_child(picker_row)
+
+	var tl_card := _make_section_card(vbox, "Timeline Events & Damage Log",
+		"Filter markers, notes, damage/heal entries, and cues.")
+	var tl_filter_row := HBoxContainer.new()
+	tl_filter_row.add_theme_constant_override(&"separation", 4)
+	_rec_event_filter = OptionButton.new()
+	for label_str in ["All Events", "Markers & Notes", "Damage & Heal", "Cues & Other"]:
+		_rec_event_filter.add_item(label_str)
+	_rec_event_filter.item_selected.connect(func(_idx: int) -> void: _rebuild_rec_event_tree())
+	tl_filter_row.add_child(_rec_event_filter)
+
+	_rec_event_search = LineEdit.new()
+	_rec_event_search.placeholder_text = "Search actor, source, label..."
+	_rec_event_search.clear_button_enabled = true
+	_rec_event_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rec_event_search.text_changed.connect(func(_t: String) -> void: _rebuild_rec_event_tree())
+	tl_filter_row.add_child(_rec_event_search)
+	tl_filter_row.add_child(_btn("Diff vs Sample", _on_diff_vs_sample, &"Search",
+		"Compare the currently inspected .reee against the built-in sample_playback.reee using REEEplayDiff."))
+	tl_card.add_child(tl_filter_row)
+
+	_rec_event_tree = Tree.new()
+	_rec_event_tree.custom_minimum_size = Vector2(0, 170)
+	_rec_event_tree.columns = 4
+	_rec_event_tree.column_titles_visible = true
+	_rec_event_tree.set_column_title(0, "Time")
+	_rec_event_tree.set_column_title(1, "Tick")
+	_rec_event_tree.set_column_title(2, "Type")
+	_rec_event_tree.set_column_title(3, "Details")
+	_rec_event_tree.set_column_expand(0, false)
+	_rec_event_tree.set_column_custom_minimum_width(0, 56)
+	_rec_event_tree.set_column_expand(1, false)
+	_rec_event_tree.set_column_custom_minimum_width(1, 50)
+	_rec_event_tree.set_column_expand(2, false)
+	_rec_event_tree.set_column_custom_minimum_width(2, 110)
+	_rec_event_tree.set_column_expand(3, true)
+	_rec_event_tree.hide_root = true
+	_rec_event_tree.item_selected.connect(_on_rec_event_selected)
+	tl_card.add_child(_rec_event_tree)
 
 	var insp_card := _make_section_card(vbox, ".reee File Inspector")
 	_rec_output = RichTextLabel.new()
@@ -1473,8 +1519,14 @@ func inspect_file(path: String) -> void:
 		return
 	var info := REEEplayAuthoring.inspect_reee_file(path)
 	if not bool(info.get("ok", false)):
+		_rec_inspected_info = {}
+		_rec_inspected_path = ""
+		_rebuild_rec_event_tree()
 		_rec_output.text = "[color=#ff6b6b]Failed to inspect %s:[/color] %s" % [path, str(info.get("error_message", ""))]
 		return
+	_rec_inspected_info = info
+	_rec_inspected_path = path
+	_rebuild_rec_event_tree()
 
 	var s: Dictionary = info["summary"]
 	var b: Dictionary = info["blocks"]
@@ -1525,6 +1577,99 @@ func inspect_file(path: String) -> void:
 		lines.append("  ... +%d more" % (dmg.size() - dmg_limit))
 
 	_rec_output.text = "\n".join(lines)
+
+
+func _on_inspect_demo_sample() -> void:
+	var sample_path := "res://addons/reeeplay/demo/sample_playback.reee"
+	if FileAccess.file_exists(sample_path):
+		inspect_file(sample_path)
+	elif _rec_output != null:
+		_rec_output.text = "[color=#f5c242]Sample file not found: %s[/color]" % sample_path
+
+
+func _on_diff_vs_sample() -> void:
+	if _rec_output == null:
+		return
+	if _rec_inspected_path.is_empty():
+		_rec_output.text = "[color=#f5c242]Inspect a .reee file first before running Diff.[/color]"
+		return
+	var sample_path := "res://addons/reeeplay/demo/sample_playback.reee"
+	var diff := REEEplayDiff.compare_files(_rec_inspected_path, sample_path)
+	_rec_output.text = diff.to_summary()
+
+
+func _rebuild_rec_event_tree() -> void:
+	if _rec_event_tree == null:
+		return
+	_rec_event_tree.clear()
+	var root_item := _rec_event_tree.create_item()
+	if _rec_inspected_info.is_empty():
+		return
+
+	var filter_idx := _rec_event_filter.selected if _rec_event_filter != null else 0
+	var q := _rec_event_search.text.strip_edges().to_lower() if _rec_event_search != null else ""
+	var tick_rate := maxi(1, int(_rec_inspected_info.get("summary", {}).get("tick_rate", 60)))
+
+	var rows: Array[Dictionary] = []
+	for d: Dictionary in _rec_inspected_info.get("damage", []):
+		var kind_tag := "HEAL" if bool(d["is_heal"]) else ("KILL" if bool(d["is_killing_blow"]) else "DMG")
+		var env_tag := " [Env]" if bool(d["is_environmental"]) else ""
+		var via := (" via %s" % str(d["source_name"])) if not str(d["source_name"]).is_empty() else ""
+		var detail := "%s -> %s: %.1f (%s)%s" % [
+			str(d["actor"]), str(d["victim"]), float(d["amount"]), str(d["damage_type"]), via
+		]
+		var tick := int(d.get("tick", 0))
+		rows.append({
+			"bucket": 2,
+			"tick": tick,
+			"time": float(tick) / float(tick_rate),
+			"type": kind_tag + env_tag,
+			"details": detail,
+		})
+
+	for ev: Dictionary in _rec_inspected_info.get("events", []):
+		var type_id := str(ev.get("type_id", ""))
+		if type_id == "REEEplayDamageEntry":
+			continue
+		var is_marker := type_id == "REEEplayMarkerEvent" or type_id == "REEEplayRecordingNote"
+		rows.append({
+			"bucket": 1 if is_marker else 3,
+			"tick": int(ev.get("tick", 0)),
+			"time": float(ev.get("timestamp", 0.0)),
+			"type": type_id.trim_prefix("REEEplay"),
+			"details": str(ev.get("label", "")),
+		})
+
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["tick"]) < int(b["tick"])
+	)
+
+	for r in rows:
+		if filter_idx != 0 and int(r["bucket"]) != filter_idx:
+			continue
+		var hay := ("%s %s" % [str(r["type"]), str(r["details"])]).to_lower()
+		if not q.is_empty() and not hay.contains(q):
+			continue
+		var item := _rec_event_tree.create_item(root_item)
+		item.set_text(0, "%.2fs" % float(r["time"]))
+		item.set_text(1, str(int(r["tick"])))
+		item.set_text(2, str(r["type"]))
+		item.set_text(3, str(r["details"]))
+		item.set_metadata(0, r)
+
+
+func _on_rec_event_selected() -> void:
+	if _rec_event_tree == null or _rec_output == null:
+		return
+	var sel := _rec_event_tree.get_selected()
+	if sel == null:
+		return
+	var meta: Variant = sel.get_metadata(0)
+	if meta is Dictionary:
+		var r := meta as Dictionary
+		_rec_output.text = "[b]Selected Timeline Entry[/b]\n[b]Time:[/b] %.2fs (tick %d)\n[b]Type:[/b] %s\n[b]Details:[/b] %s" % [
+			float(r["time"]), int(r["tick"]), str(r["type"]), str(r["details"])
+		]
 
 
 # ---- Parsing & UI Utilities -----------------------------------------------------------------------

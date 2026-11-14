@@ -23,6 +23,7 @@ const SAMPLE_PLAYBACK_PATH := "res://addons/reeeplay/demo/sample_playback.reee"
 @onready var speed_option: OptionButton = $HUD/Panel/Margin/VBox/PlaybackRow/SpeedOption
 @onready var time_label: Label = $HUD/Panel/Margin/VBox/PlaybackRow/TimeLabel
 @onready var scrub_slider: HSlider = $HUD/Panel/Margin/VBox/ScrubSlider
+@onready var marker_row: HBoxContainer = $HUD/Panel/Margin/VBox/MarkerRow
 @onready var recap_label: RichTextLabel = $HUD/Panel/Margin/VBox/RecapLabel
 
 var _player: REEEplayPlayer = null
@@ -316,6 +317,7 @@ func _load_recording_into_player(rec: REEEplayRecording) -> void:
 	btn_save.disabled = false
 	btn_play.disabled = false
 	btn_stop.disabled = false
+	_rebuild_timeline_markers(rec)
 	_refresh_damage_recap(rec.damage_log, int(rec.entities.keys()[0]) if not rec.entities.is_empty() else 1)
 
 
@@ -381,6 +383,66 @@ func _on_player_event_reached(ev: REEEplayEvent) -> void:
 	if ev == null:
 		return
 	_update_status("Event [t=%d]: %s (%s)" % [ev.tick, ev.get_timeline_label(), ev.get_type_id()])
+	if ev is REEEplayDamageEntry:
+		_spawn_3d_hit_popup(ev as REEEplayDamageEntry)
+
+
+func _rebuild_timeline_markers(rec: REEEplayRecording) -> void:
+	if marker_row == null:
+		return
+	for child in marker_row.get_children():
+		child.queue_free()
+	if rec == null or rec.events.is_empty():
+		var empty_lbl := Label.new()
+		empty_lbl.text = "No timeline markers"
+		marker_row.add_child(empty_lbl)
+		return
+	var rate := float(maxi(1, rec.tick_rate))
+	for ev in rec.events:
+		var t_sec := float(maxi(0, ev.tick - rec.start_tick)) / rate
+		var btn := Button.new()
+		btn.text = "%.1fs %s" % [t_sec, ev.get_timeline_label()]
+		btn.modulate = ev.get_timeline_color()
+		btn.tooltip_text = "Jump to %.2fs (tick %d)" % [t_sec, ev.tick]
+		btn.pressed.connect(func() -> void:
+			if _player == null:
+				return
+			if not _in_replay_mode:
+				_set_replay_mode(true)
+			_player.seek_to_time(t_sec)
+			_update_status("Jumped to %.2fs: %s" % [t_sec, ev.get_timeline_label()])
+		)
+		marker_row.add_child(btn)
+
+
+func _spawn_3d_hit_popup(entry: REEEplayDamageEntry) -> void:
+	if _player == null or stage == null or entry == null:
+		return
+	var victim_id := entry.victim.entity_id if entry.victim != null else 0
+	var target_proxy := _player.get_proxy(victim_id) as Node3D
+	var world_pos := (target_proxy.global_position + Vector3(0.0, 2.0, 0.0)) if target_proxy != null else Vector3(0.0, 2.0, 0.0)
+
+	var lbl := Label3D.new()
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.font_size = 42
+	lbl.outline_size = 8
+	if entry.is_heal:
+		lbl.text = "+%.0f %s" % [entry.amount, entry.source_name]
+		lbl.modulate = Color(0.35, 0.95, 0.55)
+	elif entry.is_environmental:
+		lbl.text = "-%.0f %s" % [entry.amount, entry.source_name]
+		lbl.modulate = Color(1.0, 0.45, 0.25)
+	else:
+		lbl.text = "-%.0f %s" % [entry.amount, entry.source_name]
+		lbl.modulate = Color(1.0, 0.28, 0.32)
+	stage.cue_root.add_child(lbl)
+	lbl.global_position = world_pos
+
+	var tw := lbl.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(lbl, "global_position", world_pos + Vector3(0.0, 1.35, 0.0), 1.1)
+	tw.tween_property(lbl, "modulate:a", 0.0, 1.1)
+	tw.chain().tween_callback(lbl.queue_free)
 
 
 func _refresh_damage_recap(dlog: REEEplayDamageLog, victim_id: int) -> void:
