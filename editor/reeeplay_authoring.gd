@@ -58,6 +58,19 @@ static func find_tracked_for_node(node: Node) -> REEEplayTracked:
 	return null
 
 
+## Finds a Skeleton3D on node or its descendants.
+static func find_skeleton_near(node: Node) -> Skeleton3D:
+	if node == null:
+		return null
+	if node is Skeleton3D:
+		return node as Skeleton3D
+	for child in node.get_children():
+		var found := find_skeleton_near(child)
+		if found != null:
+			return found
+	return null
+
+
 ## Computes readiness checks, resolved rate inheritance, and bandwidth estimate for a REEEplayTracked node.
 static func diagnose_tracked(tracked: REEEplayTracked) -> Dictionary:
 	var checks: Array[Dictionary] = []

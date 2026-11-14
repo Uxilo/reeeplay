@@ -746,17 +746,32 @@ func _test_editor_dock_and_inspector() -> void:
 		var path := str(d[0])
 		_assert(dock._setting_controls.has(path), "REEEplayDock missing control for setting: %s" % path)
 
+	_assert(not dock.is_advanced_mode(), "Dock should default to Simple mode")
+	_assert(dock._tabs.is_tab_hidden(1) and dock._tabs.is_tab_hidden(3), "Simple mode should hide Presets & Settings tabs")
+	_assert(dock._simple_setup_box.visible and not dock._advanced_setup_box.visible, "Simple mode should show Simple setup box")
+	dock.set_advanced_mode(true)
+	_assert(dock.is_advanced_mode(), "set_advanced_mode(true) should enable Advanced mode")
+	_assert(not dock._tabs.is_tab_hidden(1) and not dock._tabs.is_tab_hidden(3), "Advanced mode should show all 4 tabs")
+	_assert(not dock._simple_setup_box.visible and dock._advanced_setup_box.visible, "Advanced mode should show Advanced setup box")
+	dock.set_advanced_mode(false)
+	_assert(not dock.is_advanced_mode() and dock._tabs.is_tab_hidden(1), "Toggling back to Simple mode should re-hide Advanced tabs")
+
 	var changed_paths: Array[String] = []
 	dock.setting_changed.connect(func(p: String, _v: Variant) -> void: changed_paths.append(p))
 	dock._apply_project_setting("reeeplay/recording/sample_rate", 45.0)
 	_assert_near(float(ProjectSettings.get_setting("reeeplay/recording/sample_rate")), 45.0, 0.001, "Dock should apply sample_rate to ProjectSettings")
 	_assert(changed_paths.has("reeeplay/recording/sample_rate"), "Dock should emit setting_changed on edit")
+	_assert_near(dock._simple_rate_slider.value, 45.0, 0.001, "Simple rate slider should sync with ProjectSettings")
 
 	dock._reset_all_settings()
 	_assert_near(float(ProjectSettings.get_setting("reeeplay/recording/sample_rate")), 20.0, 0.001, "Reset all should restore default sample_rate")
 
 	var n3 := Node3D.new()
 	n3.name = "HeroTestNode"
+	var skel := Skeleton3D.new()
+	skel.name = "Skeleton3D"
+	n3.add_child(skel)
+	_assert(REEEplayAuthoring.find_skeleton_near(n3) == skel, "find_skeleton_near should locate child Skeleton3D")
 	var tracked := REEEplayAuthoring.auto_setup_node(n3)
 	_assert(tracked != null and tracked.get_parent() == n3, "auto_setup_node should attach REEEplayTracked child")
 	_assert(tracked.custom_channels.size() >= 3, "auto_setup_node on Node3D should add position, rotation, and visible")

@@ -1,13 +1,12 @@
 @tool
 ## The REEEplay editor dock:
-## - Target Tracked / Session selector & one-click Auto-Setup
-## - Presets & 50-Entity Budget Estimator
+## - Simple / Advanced mode toggle (Simple defaults to a 3-step Quick Setup + nice tweaks; Advanced exposes full channel/rate controls, Presets & Budget, and all Project Settings)
 ## - Recordings (.reee) browser & structured inspector (Summary, Entities, Events, Damage Logs)
-## - Searchable Settings editor covering every REEEplaySettings.DEFS entry
 class_name REEEplayDock
 extends VBoxContainer
 
 signal setting_changed(path: String, value: Variant)
+signal mode_changed(advanced: bool)
 
 const PRESET_NAMES := [
 	"Singleplayer (30 Hz Full + LOD)",
@@ -44,19 +43,44 @@ const QUICK_SETTING_PATHS := [
 ## Save project.godot after each ProjectSettings edit (disable in headless tests).
 var persist := true
 
-var _setting_controls: Dictionary = {}  # path -> Control
+var _setting_controls: Dictionary = {}  # path -> Control (Tab 4: all REEEplaySettings.DEFS)
 var _setting_rows: Dictionary = {}      # path -> Control
-var _quick_controls: Dictionary = {}    # path -> Control
+var _quick_controls: Dictionary = {}    # path -> Control (Tab 2: Presets & Budget)
+var _simple_controls: Dictionary = {}   # path -> Control (Tab 1 Simple: Quick Tweaks)
 var _updating_ui := false
+var _advanced_mode := false
 
-# Header & Target context
+# Header & Context Bar
+var _simple_mode_btn: Button
+var _advanced_mode_btn: Button
 var _selection_pill: Label
 var _target_picker: OptionButton
 var _target_nodes: Array[Node] = []
 var _pinned_target: Node = null
 var _tabs: TabContainer
 
-# Tab 1: Setup & Track
+# Tab 0 containers (Simple vs Advanced)
+var _simple_setup_box: VBoxContainer
+var _advanced_setup_box: VBoxContainer
+
+# Tab 0 — Simple Mode widgets
+var _simple_session_status: Label
+var _simple_add_session_btn: Button
+var _simple_select_session_btn: Button
+var _simple_auto_start_check: CheckBox
+var _simple_auto_save_exit_check: CheckBox
+var _simple_preset_option: OptionButton
+var _simple_entity_card: VBoxContainer
+var _simple_entity_hint: Label
+var _simple_display_name_edit: LineEdit
+var _simple_team_spin: SpinBox
+var _simple_setup_output: RichTextLabel
+var _simple_rate_slider: HSlider
+var _simple_rate_value_lbl: Label
+var _simple_budget_bar: ProgressBar
+var _simple_budget_label: RichTextLabel
+
+# Tab 0 — Advanced Mode widgets
 var _checklist_box: VBoxContainer
 var _rate_readout_label: RichTextLabel
 var _track_fields_box: VBoxContainer
@@ -72,18 +96,18 @@ var _channels_list: VBoxContainer
 var _preset_menu_btn: MenuButton
 var _setup_output: RichTextLabel
 
-# Tab 2: Presets & Budget
+# Tab 1: Presets & Budget
 var _preset_option: OptionButton
 var _budget_bar: ProgressBar
 var _budget_label: RichTextLabel
 
-# Tab 3: Recordings (.reee Browser & Inspector)
+# Tab 2: Recordings (.reee Browser & Inspector)
 var _rec_picker: OptionButton
 var _rec_paths: Array[String] = []
 var _rec_output: RichTextLabel
 var _file_dialog: FileDialog
 
-# Tab 4: Settings
+# Tab 3: Settings
 var _settings_filter: LineEdit
 var _settings_list: VBoxContainer
 
@@ -104,6 +128,7 @@ func build() -> void:
 	_setting_controls.clear()
 	_setting_rows.clear()
 	_quick_controls.clear()
+	_simple_controls.clear()
 
 	REEEplaySettings.register()
 	add_theme_constant_override(&"separation", 4)
@@ -114,7 +139,7 @@ func build() -> void:
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(_tabs)
 
-	_tabs.add_child(_wrap_tab("Setup & Track", _build_setup_tab()))
+	_tabs.add_child(_wrap_tab("Quick Setup", _build_setup_tab()))
 	_tabs.add_child(_wrap_tab("Presets & Budget", _build_presets_tab()))
 	_tabs.add_child(_wrap_tab("Recordings", _build_recordings_tab()))
 	_tabs.add_child(_wrap_tab("Settings", _build_settings_tab()))
@@ -126,9 +151,35 @@ func build() -> void:
 	_file_dialog.file_selected.connect(inspect_file)
 	add_child(_file_dialog)
 
+	set_advanced_mode(_advanced_mode)
 	refresh_selection()
 	_refresh_presets_and_budget()
 	_refresh_recordings_list()
+
+
+## Switches between Simple (guided 3-step setup + nice tweaks) and Advanced (full controls + all settings).
+func set_advanced_mode(enabled: bool) -> void:
+	_advanced_mode = enabled
+	if _simple_mode_btn != null:
+		_simple_mode_btn.set_pressed_no_signal(not enabled)
+	if _advanced_mode_btn != null:
+		_advanced_mode_btn.set_pressed_no_signal(enabled)
+	if _simple_setup_box != null:
+		_simple_setup_box.visible = not enabled
+	if _advanced_setup_box != null:
+		_advanced_setup_box.visible = enabled
+	if _tabs != null and _tabs.get_tab_count() >= 4:
+		_tabs.set_tab_title(0, "Setup & Track" if enabled else "Quick Setup")
+		_tabs.set_tab_hidden(1, not enabled)
+		_tabs.set_tab_hidden(3, not enabled)
+		if not enabled and (_tabs.current_tab == 1 or _tabs.current_tab == 3):
+			_tabs.current_tab = 0
+	mode_changed.emit(enabled)
+
+
+## Returns true when Advanced mode is active.
+func is_advanced_mode() -> bool:
+	return _advanced_mode
 
 
 # ---- Header & Context Bar -------------------------------------------------------------------------
@@ -146,15 +197,35 @@ func _build_header_bar() -> void:
 	title.add_theme_font_size_override(&"font_size", 13)
 	brand_row.add_child(title)
 
+	var mode_box := HBoxContainer.new()
+	mode_box.add_theme_constant_override(&"separation", 2)
+	_simple_mode_btn = Button.new()
+	_simple_mode_btn.text = "Simple"
+	_simple_mode_btn.toggle_mode = true
+	_simple_mode_btn.button_pressed = not _advanced_mode
+	_simple_mode_btn.tooltip_text = "Guided 3-step setup with essential recording tweaks."
+	_simple_mode_btn.pressed.connect(func() -> void: set_advanced_mode(false))
+	mode_box.add_child(_simple_mode_btn)
+
+	_advanced_mode_btn = Button.new()
+	_advanced_mode_btn.text = "Advanced"
+	_advanced_mode_btn.toggle_mode = true
+	_advanced_mode_btn.button_pressed = _advanced_mode
+	_advanced_mode_btn.tooltip_text = "Full channel editor, presets, budget estimator, and all Project Settings."
+	_advanced_mode_btn.pressed.connect(func() -> void: set_advanced_mode(true))
+	mode_box.add_child(_advanced_mode_btn)
+	brand_row.add_child(mode_box)
+
 	_selection_pill = Label.new()
-	_selection_pill.text = "No target"
+	_selection_pill.text = "Ready"
 	_selection_pill.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_selection_pill.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_selection_pill.clip_text = true
 	_selection_pill.add_theme_font_size_override(&"font_size", 11)
 	brand_row.add_child(_selection_pill)
 
 	var reset_btn := Button.new()
-	reset_btn.text = "Reset Defaults"
+	reset_btn.text = ""
 	reset_btn.flat = true
 	reset_btn.icon = _icon(&"Reload")
 	reset_btn.tooltip_text = "Reset every REEEplay Project Setting to its default value."
@@ -179,10 +250,6 @@ func _build_header_bar() -> void:
 
 	picker_row.add_child(_btn("Select", _on_focus_active_target, &"Node",
 		"Focus the active REEEplayTracked or REEEplaySession node in the Scene Tree & Inspector."))
-	picker_row.add_child(_btn("+ Track Node", _on_track_selected_node, &"Add",
-		"Attach and auto-configure REEEplayTracked on the currently selected scene node."))
-	picker_row.add_child(_btn("+ Session", _on_create_session_node, &"Play",
-		"Add a REEEplaySession node under the edited scene root."))
 	top_vbox.add_child(picker_row)
 
 	add_child(top_card)
@@ -206,9 +273,192 @@ func _wrap_tab(tab_title: String, content: Control) -> ScrollContainer:
 	return scroll
 
 
-# ---- Tab 1: Setup & Track -------------------------------------------------------------------------
+# ---- Tab 0: Quick Setup (Simple) & Setup & Track (Advanced) ---------------------------------------
 
 func _build_setup_tab() -> Control:
+	var root_box := VBoxContainer.new()
+	root_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root_box.add_theme_constant_override(&"separation", 8)
+
+	_simple_setup_box = _build_simple_setup_box()
+	_advanced_setup_box = _build_advanced_setup_box()
+	root_box.add_child(_simple_setup_box)
+	root_box.add_child(_advanced_setup_box)
+	return root_box
+
+
+func _build_simple_setup_box() -> VBoxContainer:
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override(&"separation", 8)
+
+	# Step 1: Scene Recorder
+	var s1 := _make_section_card(vbox, "1. Scene Recorder",
+		"Every scene needs one REEEplaySession (or start/stop via REEEplay autoload in code).")
+	_simple_session_status = Label.new()
+	_simple_session_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_simple_session_status.add_theme_font_size_override(&"font_size", 11)
+	s1.add_child(_simple_session_status)
+
+	var s1_btns := HBoxContainer.new()
+	s1_btns.add_theme_constant_override(&"separation", 4)
+	_simple_add_session_btn = _btn("+ Add Scene Recorder", func() -> void: _on_create_session_node(true), &"Play",
+		"Adds a REEEplaySession that auto-starts on Play and auto-saves on Exit.")
+	_simple_select_session_btn = _btn("Select Recorder", _on_select_scene_session, &"Node",
+		"Selects the scene's REEEplaySession in the Scene Tree.")
+	s1_btns.add_child(_simple_add_session_btn)
+	s1_btns.add_child(_simple_select_session_btn)
+	s1.add_child(s1_btns)
+
+	var s1_toggles := HBoxContainer.new()
+	s1_toggles.add_theme_constant_override(&"separation", 10)
+	_simple_auto_start_check = CheckBox.new()
+	_simple_auto_start_check.text = "Auto-Start on Play"
+	_simple_auto_start_check.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_simple_auto_start_check.toggled.connect(func(on: bool) -> void: _set_scene_session_prop(&"auto_start_on_ready", on))
+	s1_toggles.add_child(_simple_auto_start_check)
+
+	_simple_auto_save_exit_check = CheckBox.new()
+	_simple_auto_save_exit_check.text = "Auto-Save on Exit"
+	_simple_auto_save_exit_check.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_simple_auto_save_exit_check.toggled.connect(func(on: bool) -> void: _set_scene_session_prop(&"auto_save_on_exit", on))
+	s1_toggles.add_child(_simple_auto_save_exit_check)
+	s1.add_child(s1_toggles)
+
+	var sp_row := HBoxContainer.new()
+	sp_row.add_theme_constant_override(&"separation", 6)
+	var sp_lbl := Label.new()
+	sp_lbl.text = "Game Style Preset:"
+	sp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sp_lbl.add_theme_font_size_override(&"font_size", 11)
+	sp_row.add_child(sp_lbl)
+	_simple_preset_option = OptionButton.new()
+	_simple_preset_option.custom_minimum_size.x = 175
+	for pname in PRESET_NAMES:
+		_simple_preset_option.add_item(pname)
+	_simple_preset_option.item_selected.connect(_on_preset_selected)
+	sp_row.add_child(_simple_preset_option)
+	s1.add_child(sp_row)
+
+	# Step 2: Tracked Entities
+	var s2 := _make_section_card(vbox, "2. Tracked Entities",
+		"Select any character, prop, or Skeleton3D in the Scene Tree and track it in one click.")
+	var s2_btns := HBoxContainer.new()
+	s2_btns.add_theme_constant_override(&"separation", 4)
+	s2_btns.add_child(_btn("+ Track Selected", _on_track_selected_node, &"Add",
+		"Attach REEEplayTracked to the selected node with automatic transform & visibility channels."))
+	s2_btns.add_child(_btn("+ Track Skeleton", _on_track_skeleton_node, &"Skeleton3D",
+		"Find Skeleton3D on the selected character and track full ragdoll/animation bone poses."))
+	s2_btns.add_child(_btn("Make Proxy", _on_generate_proxy, &"PackedScene",
+		"Generate a stripped visual-only proxy scene for playback."))
+	s2.add_child(s2_btns)
+
+	_simple_entity_hint = Label.new()
+	_simple_entity_hint.text = "No tracked entity selected. Pick a node in the Scene Tree and click '+ Track Selected'."
+	_simple_entity_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_simple_entity_hint.add_theme_font_size_override(&"font_size", 11)
+	_simple_entity_hint.modulate = Color(0.68, 0.74, 0.82)
+	s2.add_child(_simple_entity_hint)
+
+	_simple_entity_card = VBoxContainer.new()
+	_simple_entity_card.add_theme_constant_override(&"separation", 4)
+	_simple_display_name_edit = _line_row(_simple_entity_card, "Display Name", "Player",
+		"Name shown in timelines, damage recaps, and replay inspection.",
+		func(t: String) -> void: _set_tracked_prop(&"display_name", t))
+	_simple_team_spin = _spin_row(_simple_entity_card, "Team ID", -1, 64, 1, -1, "",
+		"Team index (-1 = neutral / free-for-all).",
+		func(v: float) -> void: _set_tracked_prop(&"team_id", int(v)))
+
+	var quick_ch_row := HBoxContainer.new()
+	quick_ch_row.add_theme_constant_override(&"separation", 4)
+	quick_ch_row.add_child(_btn("+ 3D Move", func() -> void: _quick_add_channel(&"transform_3d"), &"", "Add 3D position + rotation."))
+	quick_ch_row.add_child(_btn("+ 2D Move", func() -> void: _quick_add_channel(&"transform_2d"), &"", "Add 2D position + rotation."))
+	quick_ch_row.add_child(_btn("+ Ragdoll Pose", func() -> void: _quick_add_channel(&"skeleton_pose"), &"", "Add Skeleton3D bone pose channel."))
+	quick_ch_row.add_child(_btn("+ Visibility", func() -> void: _quick_add_channel(&"visibility"), &"", "Track visible flag."))
+	_simple_entity_card.add_child(quick_ch_row)
+	s2.add_child(_simple_entity_card)
+
+	_simple_setup_output = RichTextLabel.new()
+	_simple_setup_output.bbcode_enabled = true
+	_simple_setup_output.fit_content = true
+	_simple_setup_output.scroll_active = false
+	_simple_setup_output.add_theme_font_size_override(&"normal_font_size", 11)
+	s2.add_child(_simple_setup_output)
+
+	# Step 3: Simple Tweaks
+	var s3 := _make_section_card(vbox, "3. Quick Tweaks",
+		"Dial in recording smoothness, clip length, save location, and debug HUD without digging into settings.")
+
+	# Recording Mode
+	var mode_def := _find_setting_def("reeeplay/recording/default_mode")
+	if not mode_def.is_empty():
+		var mode_ctrl := _make_setting_control_widget(mode_def, true)
+		_add_labeled_row(s3, "Recording Mode", str(mode_def[4]), mode_ctrl)
+		_simple_controls["reeeplay/recording/default_mode"] = mode_ctrl
+
+	# Smoothness (Sample Rate slider)
+	var rate_row := HBoxContainer.new()
+	rate_row.add_theme_constant_override(&"separation", 6)
+	rate_row.tooltip_text = "How smoothly movement is sampled (Hz). Higher = smoother replays, slightly larger files."
+	var rate_lbl := Label.new()
+	rate_lbl.text = "Smoothness"
+	rate_lbl.custom_minimum_size.x = 85
+	rate_lbl.add_theme_font_size_override(&"font_size", 11)
+	rate_row.add_child(rate_lbl)
+
+	_simple_rate_slider = HSlider.new()
+	_simple_rate_slider.min_value = 5.0
+	_simple_rate_slider.max_value = 60.0
+	_simple_rate_slider.step = 5.0
+	_simple_rate_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_simple_rate_slider.value = clampf(float(REEEplaySettings.value(&"reeeplay/recording/sample_rate")), 5.0, 60.0)
+	_simple_rate_slider.value_changed.connect(func(v: float) -> void:
+		_apply_project_setting("reeeplay/recording/sample_rate", float(v))
+	)
+	rate_row.add_child(_simple_rate_slider)
+
+	_simple_rate_value_lbl = Label.new()
+	_simple_rate_value_lbl.custom_minimum_size.x = 95
+	_simple_rate_value_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_simple_rate_value_lbl.add_theme_font_size_override(&"font_size", 11)
+	rate_row.add_child(_simple_rate_value_lbl)
+	s3.add_child(rate_row)
+	_simple_controls["reeeplay/recording/sample_rate"] = _simple_rate_slider
+
+	# Ring buffer, recap window, storage dir, auto-save, debug overlay
+	for item: Array in [
+		["reeeplay/recording/ring_buffer_seconds", "Clip Buffer Length"],
+		["reeeplay/damage/recap_window_seconds", "Damage Recap Window"],
+		["reeeplay/storage/directory", "Save Folder"],
+		["reeeplay/storage/auto_save", "Auto-Save on Stop"],
+		["reeeplay/debug/overlay", "Debug Stats Overlay"],
+	]:
+		var spath := str(item[0])
+		var sdef := _find_setting_def(spath)
+		if sdef.is_empty():
+			continue
+		var sctrl := _make_setting_control_widget(sdef, true)
+		_add_labeled_row(s3, str(item[1]), str(sdef[4]), sctrl)
+		_simple_controls[spath] = sctrl
+
+	_simple_budget_bar = ProgressBar.new()
+	_simple_budget_bar.min_value = 0.0
+	_simple_budget_bar.max_value = 120.0
+	_simple_budget_bar.show_percentage = false
+	_simple_budget_bar.custom_minimum_size.y = 10
+	s3.add_child(_simple_budget_bar)
+
+	_simple_budget_label = RichTextLabel.new()
+	_simple_budget_label.bbcode_enabled = true
+	_simple_budget_label.fit_content = true
+	_simple_budget_label.scroll_active = false
+	_simple_budget_label.add_theme_font_size_override(&"normal_font_size", 11)
+	s3.add_child(_simple_budget_label)
+
+	return vbox
+
+
+func _build_advanced_setup_box() -> VBoxContainer:
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override(&"separation", 8)
@@ -219,9 +469,17 @@ func _build_setup_tab() -> Control:
 	_checklist_box.add_theme_constant_override(&"separation", 3)
 	ready_card.add_child(_checklist_box)
 
+	var top_actions := HBoxContainer.new()
+	top_actions.add_theme_constant_override(&"separation", 4)
+	top_actions.add_child(_btn("+ Track Node", _on_track_selected_node, &"Add",
+		"Attach and auto-configure REEEplayTracked on the currently selected scene node."))
+	top_actions.add_child(_btn("+ Session", func() -> void: _on_create_session_node(false), &"Play",
+		"Add a REEEplaySession node under the edited scene root."))
+	ready_card.add_child(top_actions)
+
 	var action_row := HBoxContainer.new()
 	action_row.add_theme_constant_override(&"separation", 4)
-	action_row.add_child(_btn("Auto-Setup Tracked Node", _on_auto_setup_tracked, &"Tools",
+	action_row.add_child(_btn("Auto-Setup Tracked", _on_auto_setup_tracked, &"Tools",
 		"Populate default transform/visibility channels and stable_key on the active target."))
 
 	_preset_menu_btn = MenuButton.new()
@@ -236,7 +494,7 @@ func _build_setup_tab() -> Control:
 	pop.id_pressed.connect(_on_add_channel_preset_id)
 	action_row.add_child(_preset_menu_btn)
 
-	action_row.add_child(_btn("Generate Proxy Scene", _on_generate_proxy, &"PackedScene",
+	action_row.add_child(_btn("Generate Proxy", _on_generate_proxy, &"PackedScene",
 		"Create a stripped visual-only proxy PackedScene and assign it to proxy_scene."))
 	ready_card.add_child(action_row)
 
@@ -297,7 +555,7 @@ func _build_setup_tab() -> Control:
 	return vbox
 
 
-# ---- Tab 2: Presets & Budget ----------------------------------------------------------------------
+# ---- Tab 1: Presets & Budget (Advanced) -----------------------------------------------------------
 
 func _build_presets_tab() -> Control:
 	var vbox := VBoxContainer.new()
@@ -329,18 +587,7 @@ func _build_presets_tab() -> Control:
 		if def.is_empty():
 			continue
 		var qctrl := _make_setting_control_widget(def, true)
-		var qrow := HBoxContainer.new()
-		qrow.tooltip_text = str(def[4])
-		var qlbl := Label.new()
-		qlbl.text = qpath.get_file().capitalize()
-		qlbl.tooltip_text = "%s\n(%s)" % [str(def[4]), qpath]
-		qlbl.mouse_filter = Control.MOUSE_FILTER_PASS
-		qlbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		qlbl.clip_text = true
-		qlbl.add_theme_font_size_override(&"font_size", 11)
-		qrow.add_child(qlbl)
-		qrow.add_child(qctrl)
-		quick_card.add_child(qrow)
+		_add_labeled_row(quick_card, qpath.get_file().capitalize(), "%s\n(%s)" % [str(def[4]), qpath], qctrl)
 		_quick_controls[qpath] = qctrl
 
 	var budget_card := _make_section_card(vbox, "50-Entity Budget Estimator",
@@ -362,7 +609,7 @@ func _build_presets_tab() -> Control:
 	return vbox
 
 
-# ---- Tab 3: Recordings (.reee Browser & Inspector) ------------------------------------------------
+# ---- Tab 2: Recordings (.reee Browser & Inspector) ------------------------------------------------
 
 func _build_recordings_tab() -> Control:
 	var vbox := VBoxContainer.new()
@@ -400,7 +647,7 @@ func _build_recordings_tab() -> Control:
 	return vbox
 
 
-# ---- Tab 4: Settings (All REEEplaySettings.DEFS) --------------------------------------------------
+# ---- Tab 3: Settings (All REEEplaySettings.DEFS — Advanced) ---------------------------------------
 
 func _build_settings_tab() -> Control:
 	var vbox := VBoxContainer.new()
@@ -550,16 +797,30 @@ func _make_setting_control_widget(d: Array, is_quick: bool) -> Control:
 
 # ---- ProjectSettings Sync & Callbacks -------------------------------------------------------------
 
+const PRESET_OVERRIDDEN_PATHS := {
+	"reeeplay/recording/sample_rate": true,
+	"reeeplay/recording/tick_rate": true,
+	"reeeplay/recording/default_mode": true,
+	"reeeplay/recording/ring_buffer_seconds": true,
+	"reeeplay/recording/keyframe_interval_seconds": true,
+	"reeeplay/recording/epsilon_scale": true,
+}
+
 func _apply_project_setting(path: String, value: Variant) -> void:
 	if _updating_ui:
 		return
+	if PRESET_OVERRIDDEN_PATHS.has(path) and int(ProjectSettings.get_setting("reeeplay/recording/preset", REEEplayPreset.Kind.CUSTOM)) != REEEplayPreset.Kind.CUSTOM:
+		ProjectSettings.set_setting("reeeplay/recording/preset", int(REEEplayPreset.Kind.CUSTOM))
+		_sync_control_value(_setting_controls.get("reeeplay/recording/preset", null), _find_setting_def("reeeplay/recording/preset"), int(REEEplayPreset.Kind.CUSTOM))
 	if ProjectSettings.get_setting(path) != value:
 		ProjectSettings.set_setting(path, value)
 		if persist:
 			ProjectSettings.save()
 		setting_changed.emit(path, value)
-	_sync_control_value(_setting_controls.get(path, null), _find_setting_def(path), value)
-	_sync_control_value(_quick_controls.get(path, null), _find_setting_def(path), value)
+	var def := _find_setting_def(path)
+	_sync_control_value(_setting_controls.get(path, null), def, value)
+	_sync_control_value(_quick_controls.get(path, null), def, value)
+	_sync_control_value(_simple_controls.get(path, null), def, value)
 	_refresh_presets_and_budget()
 
 
@@ -584,6 +845,7 @@ func refresh() -> void:
 		var val: Variant = ProjectSettings.get_setting(path, d[1])
 		_sync_control_value(_setting_controls.get(path, null), d, val)
 		_sync_control_value(_quick_controls.get(path, null), d, val)
+		_sync_control_value(_simple_controls.get(path, null), d, val)
 	_updating_ui = false
 	_refresh_presets_and_budget()
 	refresh_selection()
@@ -600,6 +862,8 @@ func _sync_control_value(c: Variant, d: Array, value: Variant) -> void:
 	var def_val: Variant = d[1]
 	if c is CheckBox:
 		(c as CheckBox).set_pressed_no_signal(bool(value))
+	elif c is HSlider:
+		(c as HSlider).set_value_no_signal(float(value))
 	elif c is OptionButton:
 		var opt := c as OptionButton
 		for i in range(opt.item_count):
@@ -638,6 +902,9 @@ func _on_preset_selected(idx: int) -> void:
 		ProjectSettings.set_setting("reeeplay/recording/ring_buffer_seconds", p.ring_buffer_seconds)
 		ProjectSettings.set_setting("reeeplay/recording/keyframe_interval_seconds", p.keyframe_interval_seconds)
 		ProjectSettings.set_setting("reeeplay/recording/epsilon_scale", p.epsilon_scale)
+	var sess := _find_scene_session()
+	if sess != null:
+		sess.preset_kind = kind
 	if persist:
 		ProjectSettings.save()
 	_updating_ui = false
@@ -646,14 +913,15 @@ func _on_preset_selected(idx: int) -> void:
 
 
 func _refresh_presets_and_budget() -> void:
+	var p_kind := clampi(int(REEEplaySettings.value(&"reeeplay/recording/preset")), 0, PRESET_NAMES.size() - 1)
 	if _preset_option != null:
-		var p_idx := clampi(int(REEEplaySettings.value(&"reeeplay/recording/preset")), 0, PRESET_NAMES.size() - 1)
-		_preset_option.select(p_idx)
+		_preset_option.select(p_kind)
+	if _simple_preset_option != null:
+		_simple_preset_option.select(p_kind)
 
 	var sample_hz := float(REEEplaySettings.value(&"reeeplay/recording/sample_rate"))
 	var tick_hz := int(REEEplaySettings.value(&"reeeplay/recording/tick_rate"))
 	var kf_sec := float(REEEplaySettings.value(&"reeeplay/recording/keyframe_interval_seconds"))
-	var p_kind := int(REEEplaySettings.value(&"reeeplay/recording/preset"))
 	if p_kind != REEEplayPreset.Kind.CUSTOM:
 		var preset := REEEplayPreset.from_kind(p_kind as REEEplayPreset.Kind)
 		sample_hz = float(preset.sample_rate)
@@ -662,6 +930,18 @@ func _refresh_presets_and_budget() -> void:
 	var resolved_tick := tick_hz if tick_hz > 0 else Engine.physics_ticks_per_second
 	var div := maxi(1, roundi(float(resolved_tick) / maxf(0.1, sample_hz)))
 	var eff_hz := float(resolved_tick) / float(div)
+
+	if _simple_rate_value_lbl != null:
+		var desc := "Balanced"
+		if eff_hz <= 10.0:
+			desc = "Light"
+		elif eff_hz >= 45.0:
+			desc = "Crisp"
+		elif eff_hz >= 28.0:
+			desc = "Smooth"
+		_simple_rate_value_lbl.text = "%.0f Hz · %s" % [eff_hz, desc]
+	if _simple_rate_slider != null:
+		_simple_rate_slider.set_value_no_signal(clampf(sample_hz, _simple_rate_slider.min_value, _simple_rate_slider.max_value))
 
 	var est := REEEplayAuthoring.estimate_budget(eff_hz, 50, 18.0, kf_sec, 0.65)
 	if _budget_bar != null:
@@ -676,36 +956,85 @@ func _refresh_presets_and_budget() -> void:
 			float(est["kb_per_sec"]), float(est["mb_per_min"]), float(est["mb_per_hour"]),
 			float(est["est_tick_ms"]), float(est["keyframe_interval_sec"]),
 		]
+	if _simple_budget_bar != null:
+		_simple_budget_bar.value = clampf(float(est["kb_per_sec"]), 0.0, _simple_budget_bar.max_value)
+	if _simple_budget_label != null:
+		_simple_budget_label.text = "[b]Est. Footprint (50 entities):[/b] ~%.1f KB/s  ·  ~%.1f MB/hour" % [
+			float(est["kb_per_sec"]), float(est["mb_per_hour"])
+		]
 
 
 # ---- Scene Discovery & Tracked Node Authoring -----------------------------------------------------
 
-## Refreshes the target selector, readiness checklist, rate readout, and tracked property controls.
+## Refreshes the target selector, Simple setup cards, readiness checklist, and tracked properties.
 func refresh_selection() -> void:
 	if _selection_pill == null:
 		return
 	_rebuild_target_picker()
+	_refresh_simple_session_card()
+
 	var target := _active_target_node()
 	if target is REEEplayTracked:
 		_render_tracked_selection(target as REEEplayTracked)
 	elif target is REEEplaySession:
 		_render_session_selection(target as REEEplaySession)
 	else:
-		_selection_pill.text = "No target in scene"
+		_selection_pill.text = "No target"
 		_selection_pill.modulate = Color(0.65, 0.72, 0.8)
 		_refresh_checklist(null)
 		_set_track_fields_enabled(false)
+		_sync_simple_entity_card(null)
 		if _rate_readout_label != null:
 			_rate_readout_label.text = "Select a node and click [b]+ Track Node[/b], or select an existing [b]REEEplayTracked[/b]."
+
+
+func _refresh_simple_session_card() -> void:
+	if _simple_session_status == null:
+		return
+	var sess := _find_scene_session()
+	if sess == null:
+		_simple_session_status.text = "○ No REEEplaySession in this scene yet. Add one for zero-code recording."
+		_simple_session_status.modulate = Color(0.95, 0.78, 0.42)
+		_simple_add_session_btn.disabled = false
+		_simple_select_session_btn.disabled = true
+		_simple_auto_start_check.disabled = true
+		_simple_auto_save_exit_check.disabled = true
+		_simple_auto_start_check.set_pressed_no_signal(false)
+		_simple_auto_save_exit_check.set_pressed_no_signal(false)
+	else:
+		_simple_session_status.text = "✓ Scene Recorder ready: %s" % sess.name
+		_simple_session_status.modulate = Color(0.45, 0.92, 0.58)
+		_simple_add_session_btn.disabled = true
+		_simple_select_session_btn.disabled = false
+		_simple_auto_start_check.disabled = false
+		_simple_auto_save_exit_check.disabled = false
+		_simple_auto_start_check.set_pressed_no_signal(sess.auto_start_on_ready)
+		_simple_auto_save_exit_check.set_pressed_no_signal(sess.auto_save_on_exit)
+
+
+func _sync_simple_entity_card(tracked: REEEplayTracked) -> void:
+	if _simple_entity_card == null:
+		return
+	if tracked == null:
+		_simple_entity_card.visible = false
+		_simple_entity_hint.visible = true
+		return
+	_simple_entity_card.visible = true
+	_simple_entity_hint.visible = false
+	_updating_ui = true
+	_simple_display_name_edit.text = tracked.display_name
+	_simple_team_spin.set_value_no_signal(float(tracked.team_id))
+	_updating_ui = false
 
 
 func _render_tracked_selection(tracked: REEEplayTracked) -> void:
 	var diag := REEEplayAuthoring.diagnose_tracked(tracked)
 	var ready := bool(diag.get("ready", false))
-	_selection_pill.text = ("%s: %s" % [tracked.name, str(diag.get("summary", ""))])
+	_selection_pill.text = ("%s · %s" % [tracked.name, str(diag.get("summary", ""))])
 	_selection_pill.modulate = Color(0.45, 0.92, 0.58) if ready else Color(1.0, 0.78, 0.32)
 	_refresh_checklist(diag.get("checks", []))
 	_set_track_fields_enabled(true)
+	_sync_simple_entity_card(tracked)
 
 	_updating_ui = true
 	_auto_track_check.set_pressed_no_signal(tracked.auto_track)
@@ -734,14 +1063,46 @@ func _render_session_selection(session: REEEplaySession) -> void:
 	var pname := str(REEEplayPreset.Kind.keys()[clampi(int(session.preset_kind), 0, REEEplayPreset.Kind.size() - 1)])
 	_refresh_checklist([
 		{"ok": true, "severity": "ok", "title": "Session", "detail": session.name},
-		{"ok": true, "severity": "ok", "title": "Preset", "detail": str(pname)},
+		{"ok": true, "severity": "ok", "title": "Preset", "detail": pname},
 		{"ok": session.auto_start_on_ready, "severity": "ok" if session.auto_start_on_ready else "warn", "title": "Auto Start", "detail": "Enabled" if session.auto_start_on_ready else "Manual start_recording()"},
 	])
 	_set_track_fields_enabled(false)
+	_sync_simple_entity_card(null)
 	if _rate_readout_label != null:
 		_rate_readout_label.text = "[b]REEEplaySession:[/b] %s (preset=%s, auto_start=%s, auto_save=%s)" % [
-			session.name, str(pname), str(session.auto_start_on_ready), str(session.auto_save_on_exit)
+			session.name, pname, str(session.auto_start_on_ready), str(session.auto_save_on_exit)
 		]
+
+
+func _find_scene_session() -> REEEplaySession:
+	var root := _edited_scene_root()
+	if root != null:
+		var all := REEEplayAuthoring.find_all_sessions(root)
+		if not all.is_empty():
+			return all[0]
+	if is_instance_valid(_pinned_target) and _pinned_target is REEEplaySession:
+		return _pinned_target as REEEplaySession
+	return null
+
+
+func _set_scene_session_prop(prop: StringName, val: Variant) -> void:
+	if _updating_ui:
+		return
+	var sess := _find_scene_session()
+	if sess == null:
+		return
+	sess.set(prop, val)
+	sess.notify_property_list_changed()
+	_refresh_simple_session_card()
+
+
+func _on_select_scene_session() -> void:
+	var sess := _find_scene_session()
+	if sess == null:
+		return
+	_pinned_target = sess
+	_on_focus_active_target()
+	refresh_selection()
 
 
 func _rebuild_target_picker() -> void:
@@ -815,16 +1176,21 @@ func _on_focus_active_target() -> void:
 	editor.call(&"edit_node", target)
 
 
-func _on_track_selected_node() -> void:
+func _selected_scene_node() -> Node:
 	var root := _edited_scene_root()
-	var target_parent: Node = root
 	var editor := _editor_interface()
 	if editor != null:
 		var sel := editor.call(&"get_selection")
 		if sel != null:
 			var nodes: Array = sel.call(&"get_selected_nodes")
 			if not nodes.is_empty():
-				target_parent = nodes[0] as Node
+				return nodes[0] as Node
+	return root
+
+
+func _on_track_selected_node() -> void:
+	var root := _edited_scene_root()
+	var target_parent := _selected_scene_node()
 	if target_parent == null:
 		_log_setup("[color=#f5c242]Open a scene or select a node in the Scene Tree first.[/color]")
 		return
@@ -834,13 +1200,33 @@ func _on_track_selected_node() -> void:
 	_log_setup("[color=#6be689]Tracked node ready:[/color] %s (%d channels)" % [tracked.name, tracked.custom_channels.size()])
 
 
-func _on_create_session_node() -> void:
+func _on_track_skeleton_node() -> void:
+	var root := _edited_scene_root()
+	var base := _selected_scene_node()
+	if base == null:
+		_log_setup("[color=#f5c242]Open a scene or select a character node first.[/color]")
+		return
+	var skel := REEEplayAuthoring.find_skeleton_near(base)
+	if skel == null:
+		_log_setup("[color=#f5c242]No Skeleton3D found on or under '%s'.[/color]" % base.name)
+		return
+	var tracked := REEEplayAuthoring.auto_setup_node(skel, root)
+	_pinned_target = tracked
+	refresh_selection()
+	_log_setup("[color=#6be689]Skeleton3D tracked:[/color] %s (%d channels)" % [skel.name, tracked.custom_channels.size()])
+
+
+func _on_create_session_node(auto_enable: bool = true) -> void:
 	var root := _edited_scene_root()
 	if root == null:
 		_log_setup("[color=#f5c242]Open a scene before creating a REEEplaySession.[/color]")
 		return
 	var sess := REEEplaySession.new()
 	sess.name = "REEEplaySession"
+	if auto_enable:
+		sess.auto_start_on_ready = true
+		sess.auto_save_on_exit = true
+		sess.preset_kind = int(REEEplaySettings.value(&"reeeplay/recording/preset")) as REEEplayPreset.Kind
 	root.add_child(sess)
 	sess.owner = root
 	_pinned_target = sess
@@ -858,17 +1244,20 @@ func _on_auto_setup_tracked() -> void:
 	_log_setup("[color=#6be689]Auto-configured[/color] %s." % t.name)
 
 
-func _on_add_channel_preset_id(id: int) -> void:
+func _quick_add_channel(preset_key: StringName) -> void:
 	var t := _active_target_node() as REEEplayTracked
 	if t == null:
 		_log_setup("[color=#f5c242]Select a REEEplayTracked node first.[/color]")
 		return
+	var added := REEEplayAuthoring.add_channel_preset(t, preset_key)
+	refresh_selection()
+	_log_setup("[color=#6be689]Added %d channel(s)[/color] from '%s'." % [added, String(preset_key)])
+
+
+func _on_add_channel_preset_id(id: int) -> void:
 	if id < 0 or id >= CHANNEL_PRESET_ITEMS.size():
 		return
-	var key := CHANNEL_PRESET_ITEMS[id][1] as StringName
-	var added := REEEplayAuthoring.add_channel_preset(t, key)
-	refresh_selection()
-	_log_setup("[color=#6be689]Added %d channel(s)[/color] from preset '%s'." % [added, String(key)])
+	_quick_add_channel(CHANNEL_PRESET_ITEMS[id][1] as StringName)
 
 
 func _on_generate_proxy() -> void:
@@ -895,6 +1284,16 @@ func _set_tracked_prop(prop: StringName, val: Variant) -> void:
 		return
 	t.set(prop, val)
 	t.notify_property_list_changed()
+	if prop == &"display_name":
+		if _display_name_edit != null and _display_name_edit.text != str(val):
+			_display_name_edit.text = str(val)
+		if _simple_display_name_edit != null and _simple_display_name_edit.text != str(val):
+			_simple_display_name_edit.text = str(val)
+	elif prop == &"team_id":
+		if _team_spin != null:
+			_team_spin.set_value_no_signal(float(val))
+		if _simple_team_spin != null:
+			_simple_team_spin.set_value_no_signal(float(val))
 
 
 func _set_track_fields_enabled(enabled: bool) -> void:
@@ -968,13 +1367,33 @@ func _rebuild_channels_list(tracked: REEEplayTracked) -> void:
 		none.modulate = Color(0.65, 0.7, 0.75)
 		_channels_list.add_child(none)
 		return
-	for ch in tracked.custom_channels:
+	for i in range(tracked.custom_channels.size()):
+		var ch := tracked.custom_channels[i]
 		if ch == null:
 			continue
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override(&"separation", 4)
 		var lbl := Label.new()
 		lbl.text = "  • %s  (%s)  [%s]" % [String(ch.effective_name()), ch.property_path, _codec_name(ch.codec)]
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.clip_text = true
 		lbl.add_theme_font_size_override(&"font_size", 11)
-		_channels_list.add_child(lbl)
+		row.add_child(lbl)
+
+		var rm_btn := Button.new()
+		rm_btn.text = "✕"
+		rm_btn.flat = true
+		rm_btn.tooltip_text = "Remove channel '%s'" % String(ch.effective_name())
+		var idx := i
+		rm_btn.pressed.connect(func() -> void:
+			var arr := tracked.custom_channels.duplicate()
+			if idx >= 0 and idx < arr.size():
+				arr.remove_at(idx)
+				tracked.custom_channels = arr
+				refresh_selection()
+		)
+		row.add_child(rm_btn)
+		_channels_list.add_child(row)
 
 
 # ---- Recordings Browser & .reee Inspector ---------------------------------------------------------
@@ -1119,7 +1538,6 @@ static func _find_setting_def(path: String) -> Array:
 
 static func _parse_enum_hint(hint_str: String) -> Array:
 	var out: Array = []
-	var idx := 0
 	for part in hint_str.split(","):
 		var s := part.strip_edges()
 		if s.is_empty():
@@ -1129,7 +1547,6 @@ static func _parse_enum_hint(hint_str: String) -> Array:
 			out.append([kv[0].strip_edges(), kv[1].strip_edges().to_int()])
 		else:
 			out.append([s, s])
-		idx += 1
 	return out
 
 
@@ -1216,6 +1633,24 @@ func _editor_color(color_name: StringName, fallback: Color = Color.WHITE) -> Col
 func _log_setup(bbcode: String) -> void:
 	if _setup_output != null:
 		_setup_output.text = bbcode
+	if _simple_setup_output != null:
+		_simple_setup_output.text = bbcode
+
+
+func _add_labeled_row(parent: Control, label_text: String, tip: String, ctrl: Control) -> void:
+	var row := HBoxContainer.new()
+	row.tooltip_text = tip
+	var lbl := Label.new()
+	lbl.text = label_text
+	lbl.tooltip_text = tip
+	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.clip_text = true
+	lbl.add_theme_font_size_override(&"font_size", 11)
+	row.add_child(lbl)
+	ctrl.tooltip_text = tip
+	row.add_child(ctrl)
+	parent.add_child(row)
 
 
 func _make_card(margin: int = 6) -> PanelContainer:
