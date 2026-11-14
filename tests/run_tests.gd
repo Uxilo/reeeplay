@@ -1,0 +1,651 @@
+extends SceneTree
+## Headless automated test suite for the REEEplay Godot addon.
+
+var _failures: Array[String] = []
+var _passed: int = 0
+
+
+class TestMigratedEventV1 extends REEEplayEvent:
+	var dmg: int = 0
+	var weapon: String = ""
+
+	func get_type_id() -> StringName:
+		return &"TestMigratedEvent"
+
+	func get_schema_version() -> int:
+		return 1
+
+
+class TestMigratedEventV2 extends REEEplayEvent:
+	var damage_amount: float = 0.0
+	var weapon_name: String = ""
+	var migrated_from_v1: bool = false
+
+	func get_type_id() -> StringName:
+		return &"TestMigratedEvent"
+
+	func get_schema_version() -> int:
+		return 2
+
+	func _migrate(data: Dictionary, from_version: int, _to_version: int) -> Dictionary:
+		if from_version == 1:
+			return {
+				"damage_amount": float(data.get("dmg", 0)),
+				"weapon_name": str(data.get("weapon", "")),
+				"migrated_from_v1": true,
+			}
+		return data
+
+
+class TestAliasEvent extends REEEplayEvent:
+	var note_code: int = 0
+
+	func get_type_id() -> StringName:
+		return &"TestAliasEvent"
+
+
+class TestCueCounter extends REEEplayCue:
+	var forward_count: int = 0
+	var reverse_count: int = 0
+	static var tracker_ref: Array = []
+
+	func get_type_id() -> StringName:
+		return &"TestCueCounter"
+
+	func _on_playback_forward(_player: Node) -> void:
+		forward_count += 1
+		tracker_ref.append("fwd:%d" % tick)
+
+	func _on_playback_reverse(_player: Node) -> void:
+		reverse_count += 1
+		tracker_ref.append("rev:%d" % tick)
+
+
+class TestReplayAttachment extends REEEplayAttachment:
+	var payload_tag: String = ""
+	var values: PackedInt32Array = PackedInt32Array()
+
+	func get_type_id() -> StringName:
+		return &"TestReplayAttachment"
+
+
+func _initialize() -> void:
+	_run_all.call_deferred()
+
+
+func _run_all() -> void:
+	print("=== REEEplay Automated Test Suite ===")
+	REEEplaySettings.register()
+
+	_run_test("ByteUtils varuint / varint / utf8 / StringTable", _test_byte_utils)
+	_run_test("All 16 Binary Codecs + AUTO + values_equal", _test_codecs)
+	_run_test("Presets + RatePolicies + Adaptive Dividers", _test_presets_and_rate_policies)
+	_run_test("Events Migration, Aliases, UnknownEvent, Cues, Attachments", _test_events_and_registry)
+	_run_test("DamageTracker + DeathRecap + Yeet Hit Signal + DPS", _test_damage_logs)
+	_run_test("Recorder Delta Suppression, Respawn, Despawn, Ring Buffer, Highlights", _test_recorder_features)
+	_run_test("End-to-End Write(.reee zstd+CRC) -> Read -> LoadErrors -> Player Seek/Interp/Slice", _test_e2e_file_and_playback)
+	_run_test("ProxyFactory Sanitization + Stage + Camera", _test_proxy_sanitization_and_camera)
+	_run_test("Manager + Session + 2D Stage + Tracked + Clock", _test_manager_session_and_2d)
+
+	print("=== Results: %d passed, %d failed ===" % [_passed, _failures.size()])
+	for f in _failures:
+		push_error("FAIL: " + f)
+		printerr("FAIL: " + f)
+
+	quit(0 if _failures.is_empty() else 1)
+
+
+func _run_test(label: String, fn: Callable) -> void:
+	var err_before := _failures.size()
+	fn.call()
+	if _failures.size() == err_before:
+		_passed += 1
+		print("[PASS] %s" % label)
+	else:
+		print("[FAIL] %s" % label)
+
+
+func _assert(cond: bool, msg: String) -> void:
+	if not cond:
+		_failures.append(msg)
+
+
+func _assert_near(a: float, b: float, eps: float, msg: String) -> void:
+	if absf(a - b) > eps:
+		_failures.append("%s (got %.6f, expected %.6f +- %.6f)" % [msg, a, b, eps])
+
+
+func _test_byte_utils() -> void:
+	var buf := StreamPeerBuffer.new()
+	buf.big_endian = false
+	var test_uints := [0, 1, 127, 128, 255, 16383, 16384, 1 << 21, 1 << 30]
+	for u in test_uints:
+		REEEplayByteUtils.put_varuint(buf, u)
+	var test_ints := [0, -1, 1, -64, 64, -100000, 100000, -1073741824]
+	for n in test_ints:
+		REEEplayByteUtils.put_varint(buf, n)
+	REEEplayByteUtils.put_utf8(buf, "REEEplay UTF-8 ✓ 🎮")
+	REEEplayByteUtils.put_utf8(buf, "")
+
+	buf.seek(0)
+	for u in test_uints:
+		_assert(REEEplayByteUtils.get_varuint(buf) == u, "varuint mismatch for %d" % u)
+	for n in test_ints:
+		_assert(REEEplayByteUtils.get_varint(buf) == n, "varint mismatch for %d" % n)
+	_assert(REEEplayByteUtils.get_utf8(buf) == "REEEplay UTF-8 ✓ 🎮", "utf8 mismatch")
+	_assert(REEEplayByteUtils.get_utf8(buf) == "", "empty utf8 mismatch")
+
+	var st := REEEplayByteUtils.StringTable.new()
+	var i0 := st.intern(&"alpha")
+	var i1 := st.intern(&"beta")
+	var i0_again := st.intern(&"alpha")
+	_assert(i0 == i0_again and i0 != i1, "StringTable intern dedup failed")
+	var st_bytes := st.to_bytes()
+	var st2 := REEEplayByteUtils.StringTable.from_bytes(st_bytes)
+	_assert(st2.size() == st.size(), "StringTable round-trip size mismatch")
+	_assert(st2.get_string(i0) == &"alpha" and st2.get_string(i1) == &"beta", "StringTable round-trip content mismatch")
+
+
+func _test_codecs() -> void:
+	var st := REEEplayByteUtils.StringTable.new()
+	var buf := StreamPeerBuffer.new()
+	buf.big_endian = false
+
+	var q_sample := Quaternion.from_euler(Vector3(0.4, -1.1, 0.7)).normalized()
+	var x3_sample := Transform3D(Basis(q_sample).scaled_local(Vector3(1.5, 2.0, 0.75)), Vector3(12.5, -3.25, 9.0))
+	var x2_sample := Transform2D(0.85, Vector2(14.0, -7.0)).scaled_local(Vector2(1.25, 0.8))
+	var pose_sample: Array[Transform3D] = [
+		Transform3D(Basis(Quaternion.from_euler(Vector3(0.1, 0.2, 0.3))), Vector3(0.0, 1.0, 0.0)),
+		Transform3D(Basis(Quaternion.from_euler(Vector3(-0.3, 0.5, -0.1))), Vector3(0.5, 0.2, -0.1)),
+	]
+	var dict_sample := {"round": 3, "scores": [10, 20], "flag": true}
+
+	var cases := [
+		{"codec": REEEplayCodec.Id.BOOL, "val": true, "eps": 0.0},
+		{"codec": REEEplayCodec.Id.INT_VAR, "val": -4219, "eps": 0.0},
+		{"codec": REEEplayCodec.Id.F32, "val": 123.456, "eps": 0.001},
+		{"codec": REEEplayCodec.Id.F16, "val": -12.25, "eps": 0.05},
+		{"codec": REEEplayCodec.Id.VEC2_F32, "val": Vector2(44.2, -91.8), "eps": 0.001},
+		{"codec": REEEplayCodec.Id.VEC2_Q16, "val": Vector2(11.345, -7.891), "eps": 0.003},
+		{"codec": REEEplayCodec.Id.VEC3_F32, "val": Vector3(-512.75, 42.5, 1024.125), "eps": 0.001},
+		{"codec": REEEplayCodec.Id.VEC3_Q16, "val": Vector3(15.123, -8.456, 4.789), "eps": 0.003},
+		{"codec": REEEplayCodec.Id.QUAT_S3, "val": q_sample, "eps": 0.005},
+		{"codec": REEEplayCodec.Id.ANGLE_U16, "val": 2.345, "eps": 0.002},
+		{"codec": REEEplayCodec.Id.COLOR_RGBA8, "val": Color(0.25, 0.5, 0.75, 0.9), "eps": 0.01},
+		{"codec": REEEplayCodec.Id.STRING_REF, "val": &"DashStrike", "eps": 0.0},
+		{"codec": REEEplayCodec.Id.TRANSFORM3D, "val": x3_sample, "eps": 0.005},
+		{"codec": REEEplayCodec.Id.TRANSFORM2D, "val": x2_sample, "eps": 0.002},
+		{"codec": REEEplayCodec.Id.SKELETON_POSE, "val": pose_sample, "eps": 0.005},
+		{"codec": REEEplayCodec.Id.VARIANT, "val": dict_sample, "eps": 0.0},
+	]
+
+	for c in cases:
+		var start_pos := buf.get_position()
+		REEEplayCodec.encode(buf, c["val"], c["codec"], st, 0.001)
+		_assert(buf.get_position() > start_pos, "Codec %d wrote 0 bytes" % c["codec"])
+
+	buf.seek(0)
+	for c in cases:
+		var decoded: Variant = REEEplayCodec.decode(buf, c["codec"], st, 0.001)
+		_assert(
+			REEEplayCodec.values_equal(c["val"], decoded, c["eps"], c["codec"]),
+			"Codec %d round-trip mismatch" % c["codec"]
+		)
+
+	_assert(REEEplayCodec.resolve_auto_codec(Vector3.ZERO, REEEplayCodec.Id.AUTO) == REEEplayCodec.Id.VEC3_F32, "AUTO Vector3 resolution mismatch")
+	_assert(REEEplayCodec.resolve_auto_codec(true, REEEplayCodec.Id.AUTO) == REEEplayCodec.Id.BOOL, "AUTO bool resolution mismatch")
+
+
+func _test_presets_and_rate_policies() -> void:
+	var sp := REEEplayPreset.from_kind(REEEplayPreset.Kind.SINGLEPLAYER)
+	_assert(sp.tick_rate == 30 and sp.recording_mode == REEEplayPreset.RecordingMode.FULL, "SINGLEPLAYER preset mismatch")
+
+	var fun := REEEplayPreset.from_kind(REEEplayPreset.Kind.FUN_GAME)
+	_assert(fun.tick_rate == 60 and fun.sample_rate == 20 and fun.recording_mode == REEEplayPreset.RecordingMode.RING_BUFFER, "FUN_GAME preset mismatch")
+
+	var comp := REEEplayPreset.from_kind(REEEplayPreset.Kind.COMPETITIVE)
+	_assert(comp.tick_rate == 60 and comp.sample_rate == 30 and comp.recording_mode == REEEplayPreset.RecordingMode.FULL_WITH_RING, "COMPETITIVE preset mismatch")
+	_assert_near(comp.epsilon_scale, 0.5, 0.001, "COMPETITIVE epsilon_scale")
+
+	var esp := REEEplayPreset.from_kind(REEEplayPreset.Kind.ESPORTS)
+	_assert(esp.tick_rate == 60 and esp.default_vector3_codec == REEEplayCodec.Id.VEC3_F32 and not esp.rate_policy.enabled, "ESPORTS preset mismatch")
+
+	# Test Distance LOD evaluation.
+	var lod := REEEplayRatePolicy.new()
+	lod.mode = REEEplayRatePolicy.Mode.DISTANCE_LOD
+	lod.near_distance = 10.0
+	lod.mid_distance = 30.0
+	lod.far_distance = 60.0
+	var eval := lod.evaluate({
+		"sim_time": 1.0,
+		"focus_position": Vector3.ZERO,
+		"entities": {
+			1: {"position": Vector3(2, 0, 0), "priority": 0, "base_divider": 1},
+			2: {"position": Vector3(20, 0, 0), "priority": 0, "base_divider": 1},
+			3: {"position": Vector3(50, 0, 0), "priority": 0, "base_divider": 1},
+			4: {"position": Vector3(90, 0, 0), "priority": 0, "base_divider": 1},
+		}
+	})
+	_assert(int(eval[1]["divider"]) == 1, "Near entity should use divider 1")
+	_assert(int(eval[2]["divider"]) == 2, "Mid entity should use divider 2")
+	_assert(int(eval[3]["divider"]) == 4, "Far entity should use divider 4")
+	_assert(int(eval[4]["divider"]) == 8, "Culled entity should use divider 8")
+
+	# Test Event Boost evaluation.
+	var ev_pol := REEEplayRatePolicy.new()
+	ev_pol.mode = REEEplayRatePolicy.Mode.EVENT_BOOST
+	ev_pol.baseline_divider = 3
+	ev_pol.boost_divider = 1
+	ev_pol.boost_duration_seconds = 2.0
+	ev_pol.notify_event(10, 5.0)
+	var boost_eval := ev_pol.evaluate({
+		"sim_time": 6.0,
+		"entities": {
+			10: {"position": null, "priority": 0, "base_divider": 3},
+			11: {"position": null, "priority": 0, "base_divider": 3},
+		}
+	})
+	_assert(int(boost_eval[10]["divider"]) == 1, "Boosted entity 10 should drop to divider 1")
+	_assert(int(boost_eval[11]["divider"]) == 3, "Unboosted entity 11 should stay at divider 3")
+
+
+func _test_events_and_registry() -> void:
+	var reg := REEEplayEventRegistry.new(false)
+	reg.register_builtin_types()
+	reg.register_type(&"TestAliasEvent", TestAliasEvent, [&"OldLegacyAlias"])
+	reg.register_type(&"TestCueCounter", TestCueCounter)
+	reg.register_attachment_type(&"TestReplayAttachment", TestReplayAttachment)
+
+	# 1) Test v1 -> v2 _migrate() roundtrip.
+	var reg_v1 := REEEplayEventRegistry.new(false)
+	reg_v1.register_type(&"TestMigratedEvent", TestMigratedEventV1)
+	var ev1 := TestMigratedEventV1.new()
+	ev1.tick = 42
+	ev1.dmg = 75
+	ev1.weapon = "PlasmaRifle"
+	ev1.actor = REEEplayActorRef.create(1, "PlayerOne", "steam_123", 1)
+
+	var st := REEEplayByteUtils.StringTable.new()
+	var buf := StreamPeerBuffer.new()
+	buf.big_endian = false
+	reg_v1.serialize_event(buf, ev1, st)
+
+	# Deserialize with v2 registry.
+	reg.register_type(&"TestMigratedEvent", TestMigratedEventV2)
+	buf.seek(0)
+	var loaded_v2 := reg.deserialize_event(buf, st) as TestMigratedEventV2
+	_assert(loaded_v2 != null, "Migrated event failed to deserialize as v2")
+	_assert(loaded_v2.tick == 42, "Migrated event tick mismatch")
+	_assert_near(loaded_v2.damage_amount, 75.0, 0.001, "Migrated event damage_amount")
+	_assert(loaded_v2.weapon_name == "PlasmaRifle", "Migrated event weapon_name")
+	_assert(loaded_v2.migrated_from_v1, "Migrated event did not execute _migrate()")
+
+	# 2) Test alias resolution.
+	_assert(reg.resolve_script(&"OldLegacyAlias") == TestAliasEvent, "Event alias resolution failed")
+
+	# 3) Test REEEplayUnknownEvent lossless round-trip.
+	var reg_missing := REEEplayEventRegistry.new(false)
+	buf.seek(0)
+	var unk := reg_missing.deserialize_event(buf, st) as REEEplayUnknownEvent
+	_assert(unk != null, "Unregistered event should become REEEplayUnknownEvent")
+	_assert(unk.get_type_id() == &"TestMigratedEvent" and unk.tick == 42, "UnknownEvent envelope mismatch")
+
+	# Re-serialize UnknownEvent, then read with reg supporting v2!
+	var buf_unk := StreamPeerBuffer.new()
+	buf_unk.big_endian = false
+	var st_unk := REEEplayByteUtils.StringTable.new()
+	reg_missing.serialize_event(buf_unk, unk, st_unk)
+	buf_unk.seek(0)
+	var recovered := reg.deserialize_event(buf_unk, st_unk) as TestMigratedEventV2
+	_assert(recovered != null and recovered.migrated_from_v1 and recovered.weapon_name == "PlasmaRifle", "UnknownEvent lossless round-trip failed")
+
+	# 4) Test attachments & PII strip.
+	var att := TestReplayAttachment.new()
+	att.tick = 10
+	att.payload_tag = "nav_snapshot"
+	att.values = PackedInt32Array([3, 1, 4, 1, 5])
+	var abuf := StreamPeerBuffer.new()
+	abuf.big_endian = false
+	reg.serialize_attachment(abuf, att, st)
+	abuf.seek(0)
+	var att2 := reg.deserialize_attachment(abuf, st) as TestReplayAttachment
+	_assert(att2 != null and att2.payload_tag == "nav_snapshot" and att2.values.size() == 5, "Attachment round-trip failed")
+
+	loaded_v2.strip_pii()
+	_assert(loaded_v2.actor.player_id == "" and loaded_v2.actor.is_anonymous, "strip_pii() did not clear player_id")
+
+
+func _test_damage_logs() -> void:
+	var tick_now := 100
+	var dt := REEEplayDamageTracker.new()
+	dt.configure(func() -> int: return tick_now)
+
+	var a1 := REEEplayActorRef.create(1, "AttackerA", "p1", 1)
+	var a2 := REEEplayActorRef.create(2, "SupportB", "p2", 1)
+	var vic := REEEplayActorRef.create(3, "VictimC", "p3", 2)
+
+	dt.record_damage(a2, vic, 25.0, &"fire", "Molotov", {"tick": 100})
+	dt.record_heal(a2, vic, 10.0, "Medkit", {"tick": 115})
+	dt.record_damage(a1, vic, 85.0, &"ballistic", "Railgun", {"tick": 130, "is_critical": true, "is_killing_blow": true})
+
+	# Test yeet-cpp style Dictionary hit payload routing via _on_yeet_hit_signal.
+	dt._on_yeet_hit_signal({
+		"attacker": a1,
+		"victim": a2,
+		"damage": 40.0,
+		"damage_type": &"melee",
+		"move_name": "Dropkick",
+		"is_critical": true,
+	})
+
+	var recap := dt.log.death_recap(3, 130, 30, 10.0, 5.0)
+	_assert(recap["killer"] != null and (recap["killer"] as REEEplayActorRef).entity_id == 1, "Death recap killer mismatch")
+	_assert((recap["assists"] as Array).size() == 1 and ((recap["assists"] as Array)[0] as REEEplayActorRef).entity_id == 2, "Death recap assists mismatch")
+	_assert_near(float(recap["total_damage"]), 110.0, 0.01, "Death recap total damage mismatch")
+	_assert_near(float(recap["ttk_seconds"]), 1.0, 0.01, "Death recap TTK mismatch (30 ticks @ 30Hz = 1.0s)")
+	_assert(dt.log.total_damage_by_entity(1) == 125.0, "Attacker 1 total damage mismatch")
+	_assert(dt.log.total_healing_by_entity(2) == 10.0, "Healer 2 total healing mismatch")
+
+
+func _test_recorder_features() -> void:
+	# 1) Entity IDs start at 1 (0 reserved for world state), delta suppression, rate change, despawn/respawn.
+	var preset := REEEplayPreset.from_kind(REEEplayPreset.Kind.ESPORTS)
+	preset.tick_rate = 10
+	preset.sample_rate = 10
+	preset.keyframe_interval_seconds = 1.0 # block every 10 ticks
+	var rec := REEEplayRecorder.new(preset)
+
+	var arch := REEEplayArchetype.create(&"Bot", REEEplayChannelPresets.transform_3d(REEEplayCodec.Id.VEC3_F32))
+	rec.register_archetype(arch)
+	var data_rec := rec.begin({"recording_id": "unit_rec"})
+
+	var n1 := Node3D.new()
+	n1.name = "Hero"
+	root.add_child(n1)
+	var id1 := rec.track(n1, &"Bot", {"stable_key": &"hero_1"})
+	_assert(id1 == 1, "First tracked entity_id must be 1 (0 reserved for world state), got %d" % id1)
+
+	rec.set_world_state(&"phase", "warmup")
+	for t in range(5):
+		n1.position = Vector3(float(t) * 2.0, 0.0, 0.0)
+		rec.capture_tick()
+
+	# Stationary ticks 5..7 should be delta-suppressed in non-keyframe ticks!
+	for _t in range(3):
+		rec.capture_tick()
+
+	# Change rate at tick 8 to divider=2, then despawn at tick 10, respawn at tick 12.
+	rec.set_entity_rate(id1, 2, 0)
+	rec.capture_tick()
+	rec.capture_tick()
+	rec.despawn(n1)
+	rec.set_world_state(&"phase", "combat")
+	rec.capture_tick() # tick 10 (keyframe block boundary)
+	rec.capture_tick() # tick 11
+
+	var n1_respawn := Node3D.new()
+	root.add_child(n1_respawn)
+	var id1_re := rec.respawn(n1_respawn, id1, &"Bot")
+	_assert(id1_re == id1, "respawn() did not preserve entity_id")
+	n1_respawn.position = Vector3(42.0, 5.0, -3.0)
+
+	var note := REEEplayRecordingNote.new()
+	note.title = "Respawn Note"
+	note.importance = 4.0
+	rec.emit_event(note)
+
+	rec.capture_tick() # tick 12
+
+	rec.stop()
+	_assert(data_rec.total_ticks == 13, "Expected 13 captured ticks, got %d" % data_rec.total_ticks)
+
+	# Verify stationary ticks 6..7 omitted EntityFrame for id1 (delta suppressed).
+	var b0 := data_rec.get_block(0)
+	_assert(b0.ticks[6].entities.is_empty() and b0.ticks[7].entities.is_empty(), "Delta suppression should skip stationary ticks 6 & 7")
+
+	var highlights := data_rec.find_highlights(2.0, 3.0)
+	_assert(highlights.size() == 1 and highlights[0].peak_tick == 12, "Highlight detector failed")
+
+	# 2) RING_BUFFER trim test.
+	var ring_preset := REEEplayPreset.from_kind(REEEplayPreset.Kind.FUN_GAME)
+	ring_preset.tick_rate = 10
+	ring_preset.sample_rate = 10
+	ring_preset.keyframe_interval_seconds = 0.5 # 5 ticks per block
+	ring_preset.ring_buffer_seconds = 1.0       # keep 10 ticks
+	var ring_rec := REEEplayRecorder.new(ring_preset)
+	ring_rec.begin({"recording_id": "ring_test"})
+	var n2 := Node3D.new()
+	root.add_child(n2)
+	ring_rec.track(n2)
+	ring_rec.set_world_state(&"round", 1)
+	for i in range(30):
+		n2.position = Vector3(float(i), 0.0, 0.0)
+		ring_rec.capture_tick()
+	var trimmed := ring_rec.stop()
+	_assert(trimmed.start_tick > 0, "RING_BUFFER should advance start_tick after pruning old blocks")
+	_assert(trimmed.total_ticks >= 10, "RING_BUFFER must retain at least ring_buffer_seconds")
+	_assert(trimmed.get_world_state_at(&"round", trimmed.get_end_tick()) == 1, "RING_BUFFER lost anchored world state")
+
+	n1.free()
+	n1_respawn.free()
+	n2.free()
+
+
+func _test_e2e_file_and_playback() -> void:
+	var preset := REEEplayPreset.from_kind(REEEplayPreset.Kind.ESPORTS)
+	preset.tick_rate = 10
+	preset.sample_rate = 10
+	preset.keyframe_interval_seconds = 1.0 # keyframe every 10 ticks
+
+	var reg := REEEplayEventRegistry.new(true)
+	reg.register_type(&"TestCueCounter", TestCueCounter)
+	TestCueCounter.tracker_ref.clear()
+
+	var recorder := REEEplayRecorder.new(preset)
+	recorder.register_archetype(REEEplayArchetype.create(&"Runner", REEEplayChannelPresets.transform_3d(REEEplayCodec.Id.VEC3_F32)))
+	var rec := recorder.begin({"recording_id": "e2e_match", "game_version": "0.9.5"})
+
+	var actor_a := Node3D.new()
+	actor_a.name = "RunnerA"
+	root.add_child(actor_a)
+	var actor_b := Node3D.new()
+	actor_b.name = "RunnerB"
+	root.add_child(actor_b)
+
+	var eid_a := recorder.track(actor_a, &"Runner", {"display_name": "Alpha"})
+	var eid_b := recorder.track(actor_b, &"Runner", {"display_name": "Beta", "divider": 2, "phase": 0})
+	recorder.set_world_state(&"score_a", 0)
+
+	for t in range(15):
+		actor_a.position = Vector3(float(t) * 10.0, 0.0, 0.0)
+		actor_b.position = Vector3(0.0, 0.0, float(t) * 4.0)
+		if t == 5:
+			recorder.set_world_state(&"score_a", 1)
+			var cue := TestCueCounter.new()
+			cue.tick = 5
+			recorder.emit_event(cue)
+		if t == 8:
+			recorder.despawn(actor_b)
+		if t == 11:
+			recorder.respawn(actor_b, eid_b, &"Runner")
+		recorder.capture_tick()
+
+	recorder.stop()
+
+	var test_path := "user://reeeplay_tests/e2e_test.reee"
+	var save_err := REEEplayWriter.save_file(rec, test_path, true, reg)
+	_assert(save_err == OK, "REEEplayWriter.save_file failed with error %d" % save_err)
+
+	# Verify error codes.
+	var missing := REEEplayReader.load_file("user://reeeplay_tests/does_not_exist_12345.reee")
+	_assert(missing.error == REEEplayFormat.LoadError.FILE_NOT_FOUND, "Expected FILE_NOT_FOUND")
+
+	var ver_rej := REEEplayReader.load_file(test_path, {"accepted_game_version": "2.0.0", "event_registry": reg})
+	_assert(ver_rej.error == REEEplayFormat.LoadError.GAME_VERSION_REJECTED, "Expected GAME_VERSION_REJECTED")
+
+	# Create corrupted copy (flip a byte in payload -> CRC_MISMATCH) & bad header copy.
+	var raw_bytes := FileAccess.get_file_as_bytes(test_path)
+	var bad_crc_bytes := raw_bytes.duplicate()
+	bad_crc_bytes[24] = bad_crc_bytes[24] ^ 0x5A
+	var bad_crc_path := "user://reeeplay_tests/bad_crc.reee"
+	var f_crc := FileAccess.open(bad_crc_path, FileAccess.WRITE)
+	f_crc.store_buffer(bad_crc_bytes)
+	f_crc.close()
+	var crc_res := REEEplayReader.load_file(bad_crc_path, {"event_registry": reg})
+	_assert(crc_res.error == REEEplayFormat.LoadError.CRC_MISMATCH, "Expected CRC_MISMATCH, got %d" % crc_res.error)
+
+	var bad_hdr_bytes := raw_bytes.duplicate()
+	bad_hdr_bytes[0] = 0x58
+	var bad_hdr_path := "user://reeeplay_tests/bad_hdr.reee"
+	var f_hdr := FileAccess.open(bad_hdr_path, FileAccess.WRITE)
+	f_hdr.store_buffer(bad_hdr_bytes)
+	f_hdr.close()
+	var hdr_res := REEEplayReader.load_file(bad_hdr_path)
+	_assert(hdr_res.error == REEEplayFormat.LoadError.CORRUPT_HEADER, "Expected CORRUPT_HEADER")
+
+	# Load valid replay lazily.
+	var load_res := REEEplayReader.load_file(test_path, {"lazy_blocks": true, "event_registry": reg})
+	_assert(load_res.error == REEEplayFormat.LoadError.OK and load_res.recording != null, "REEEplayReader.load_file failed: %s" % load_res.error_message)
+	var loaded := load_res.recording
+	_assert(loaded.get_world_state_at(&"score_a", 2) == 0, "World state at tick 2 should be 0")
+	_assert(loaded.get_world_state_at(&"score_a", 7) == 1, "World state at tick 7 should be 1")
+
+	# Playback with Stage + Interpolation + Cue + Despawn/Respawn.
+	var stage := REEEplayStage.new()
+	var player := REEEplayPlayer.new()
+	player.proxy_root = stage.entity_root
+	player.cue_host = stage.cue_root
+	root.add_child(stage)
+	root.add_child(player)
+	player.load_recording(loaded)
+
+	# Interpolate mid-tick between tick 2 (x=20) and tick 3 (x=30) -> x = 25.0!
+	player.seek_to_time(0.25) # 0.25s * 10Hz = tick 2.5
+	var proxy_a := player.get_proxy(eid_a) as Node3D
+	_assert(proxy_a != null, "Proxy A missing at t=0.25")
+	_assert_near(proxy_a.global_position.x, 25.0, 0.05, "Interpolated x at t=2.5")
+
+	# Check despawn at tick 9: proxy_b must not exist.
+	player.seek_to_tick(9)
+	_assert(player.get_proxy(eid_b) == null, "Proxy B should be despawned at tick 9")
+
+	# Check respawn at tick 12: proxy_b must return at z = 48.0!
+	player.seek_to_tick(12)
+	var proxy_b := player.get_proxy(eid_b) as Node3D
+	_assert(proxy_b != null, "Proxy B should be respawned at tick 12")
+	_assert_near(proxy_b.global_position.z, 48.0, 0.05, "Respawned Proxy B z at tick 12")
+
+	# Check forward & reverse playback cue dispatch crossing tick 5.
+	player.seek_to_tick(3)
+	player.play(1.0)
+	player.step_time(0.35) # reaches tick 6.5 -> crosses tick 5 forward!
+	_assert(TestCueCounter.tracker_ref.has("fwd:5"), "Cue should fire forward when crossing tick 5")
+	player.set_speed(-1.0)
+	player.step_time(0.3) # reverses to tick 3.5 -> crosses tick 5 backward!
+	_assert(TestCueCounter.tracker_ref.has("rev:5"), "Cue should fire reverse when crossing tick 5 backward")
+
+	# Slice [4 .. 12] -> rebase to tick 0 -> save -> reload -> verify tick 0 == old tick 4!
+	var sliced := loaded.slice(4, 12, true)
+	var slice_path := "user://reeeplay_tests/sliced.reee"
+	_assert(REEEplayWriter.save_file(sliced, slice_path, true, reg) == OK, "Sliced save_file failed")
+	var slice_load := REEEplayReader.load_file(slice_path, {"event_registry": reg})
+	_assert(slice_load.error == REEEplayFormat.LoadError.OK, "Sliced reload failed")
+
+	player.load_recording(slice_load.recording)
+	player.seek_to_tick(0)
+	var sliced_proxy_a := player.get_proxy(eid_a) as Node3D
+	_assert(sliced_proxy_a != null, "Sliced proxy A missing at tick 0")
+	_assert_near(sliced_proxy_a.global_position.x, 40.0, 0.05, "Sliced tick 0 should correspond to original tick 4 (x=40)")
+	_assert(player.get_world_state(&"score_a") == 0, "Sliced world state at tick 0 (orig tick 4) should be 0")
+	player.seek_to_tick(2) # orig tick 6
+	_assert(player.get_world_state(&"score_a") == 1, "Sliced world state at tick 2 (orig tick 6) should be 1")
+
+	player.stop_and_clear()
+	stage.free()
+	player.free()
+	actor_a.free()
+	actor_b.free()
+
+
+func _test_proxy_sanitization_and_camera() -> void:
+	var live_root := RigidBody3D.new()
+	var col := CollisionShape3D.new()
+	var tracked := REEEplayTracked.new()
+	var cam := Camera3D.new()
+	cam.current = true
+	var area := Area3D.new()
+	live_root.add_child(col)
+	live_root.add_child(tracked)
+	live_root.add_child(cam)
+	live_root.add_child(area)
+
+	REEEplayProxyFactory.sanitize_node(live_root, true, false)
+	_assert(live_root.freeze and live_root.collision_layer == 0, "RigidBody3D should be frozen with 0 collision")
+	_assert(col.disabled, "CollisionShape3D should be disabled")
+	_assert(not cam.current, "Live Camera3D should have current=false on proxy")
+	_assert(not area.monitoring and not area.monitorable, "Area3D should disable monitoring/monitorable")
+	# tracked was queued for free / removed from parent
+	_assert(tracked.get_parent() == null, "REEEplayTracked should be removed from proxy hierarchy")
+	tracked.free()
+	live_root.free()
+
+	var rcam := REEEplayCamera.new()
+	rcam.mode = REEEplayCamera.Mode.ORBIT
+	rcam.rotate_orbit(0.5, -0.2)
+	_assert(rcam.ensure_camera() is Camera3D, "REEEplayCamera should provide Camera3D")
+	rcam.free()
+
+
+func _test_manager_session_and_2d() -> void:
+	_assert(REEEplayClock.format_time(125.0) == "2:05", "Clock format mismatch")
+
+	var mgr := REEEplayManager.new()
+	mgr.name = "REEEplay"
+	root.add_child(mgr)
+
+	var p := REEEplayPreset.from_kind(REEEplayPreset.Kind.CUSTOM)
+	p.tick_rate = 10
+	p.sample_rate = 10
+	mgr.start_recording(p, {"recording_id": "mgr_2d"})
+	_assert(mgr.is_recording(), "REEEplayManager should report active recording")
+
+	var sprite := Node2D.new()
+	sprite.position = Vector2(10.0, 20.0)
+	sprite.rotation = 0.5
+	var tracked_comp := REEEplayTracked.new()
+	sprite.add_child(tracked_comp)
+	root.add_child(sprite)
+
+	_assert(tracked_comp.entity_id == 1, "REEEplayTracked auto-registration failed")
+	mgr.default_session.recorder.capture_tick()
+	sprite.position = Vector2(30.0, 60.0)
+	sprite.rotation = 1.5
+	mgr.default_session.recorder.capture_tick()
+
+	var rec := mgr.stop_recording(false)
+	_assert(rec != null and rec.total_ticks == 2, "Manager stop_recording failed")
+
+	var test_mgr_path := "user://reeeplay_tests/mgr_2d.reee"
+	_assert(mgr.save_recording(test_mgr_path, true) == OK, "Manager save_recording failed")
+	var files := mgr.list_recordings("user://reeeplay_tests")
+	_assert(files.size() >= 1, "list_recordings should list saved test replays")
+
+	var res := mgr.load_recording(test_mgr_path)
+	_assert(res.error == REEEplayFormat.LoadError.OK, "Manager load_recording failed")
+
+	var stage2d := REEEplayStage2D.new()
+	root.add_child(stage2d)
+	var player := mgr.create_player(stage2d, res.recording)
+	player.proxy_root = stage2d.entity_root
+	player.load_recording(res.recording)
+	player.seek_to_tick(1)
+	var p2 := player.get_proxy(1) as Node2D
+	_assert(p2 != null, "2D proxy missing at tick 1")
+	_assert_near(p2.global_position.x, 30.0, 0.25, "2D proxy x mismatch")
+	_assert_near(p2.global_position.y, 60.0, 0.25, "2D proxy y mismatch")
+	_assert_near(p2.global_rotation, 1.5, 0.05, "2D proxy rotation mismatch")
+
+	player.stop_and_clear()
+	stage2d.free()
+	sprite.free()
+	mgr.free()
