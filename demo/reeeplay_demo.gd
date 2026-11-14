@@ -2,6 +2,7 @@ extends Node3D
 ## Self-contained interactive 3D demo for REEEplay recording, .reee save/load, playback, and damage recap.
 
 const DEMO_SAVE_PATH := "user://reeeplay_demo/demo_clip.reee"
+const SAMPLE_PLAYBACK_PATH := "res://addons/reeeplay/demo/sample_playback.reee"
 
 @onready var live_world: Node3D = $LiveWorld
 @onready var live_camera: Camera3D = $LiveWorld/LiveCamera
@@ -15,6 +16,7 @@ const DEMO_SAVE_PATH := "user://reeeplay_demo/demo_clip.reee"
 @onready var btn_record: Button = $HUD/Panel/Margin/VBox/RecordRow/BtnRecord
 @onready var btn_save: Button = $HUD/Panel/Margin/VBox/RecordRow/BtnSave
 @onready var btn_load: Button = $HUD/Panel/Margin/VBox/RecordRow/BtnLoad
+@onready var btn_load_sample: Button = $HUD/Panel/Margin/VBox/RecordRow/BtnLoadSample
 @onready var btn_live: Button = $HUD/Panel/Margin/VBox/RecordRow/BtnLive
 @onready var btn_play: Button = $HUD/Panel/Margin/VBox/PlaybackRow/BtnPlay
 @onready var btn_stop: Button = $HUD/Panel/Margin/VBox/PlaybackRow/BtnStop
@@ -39,7 +41,10 @@ func _ready() -> void:
 	_setup_ui()
 	_register_demo_archetypes()
 	_set_replay_mode(false)
-	_update_status("Ready. Press Record (R) and move with WASD, or Load a saved .reee.")
+	if ResourceLoader.exists(SAMPLE_PLAYBACK_PATH) or FileAccess.file_exists(SAMPLE_PLAYBACK_PATH):
+		_load_sample_playback(false)
+	else:
+		_update_status("Ready. Press Record (R) and move with WASD.")
 
 
 func _physics_process(delta: float) -> void:
@@ -138,6 +143,7 @@ func _setup_ui() -> void:
 	btn_record.pressed.connect(_on_record_pressed)
 	btn_save.pressed.connect(_on_save_pressed)
 	btn_load.pressed.connect(_on_load_pressed)
+	btn_load_sample.pressed.connect(func() -> void: _load_sample_playback(true))
 	btn_live.pressed.connect(func() -> void: _set_replay_mode(false))
 	btn_play.pressed.connect(_on_play_pressed)
 	btn_stop.pressed.connect(_on_stop_pressed)
@@ -246,6 +252,27 @@ func _on_load_pressed() -> void:
 	_update_status("Loaded .reee from disk (%.2fs)." % _last_recording.get_duration_seconds())
 
 
+func _load_sample_playback(auto_play: bool = true) -> void:
+	var result := REEEplayReader.load_file(SAMPLE_PLAYBACK_PATH)
+	if result.error != REEEplayFormat.LoadError.OK or result.recording == null:
+		_update_status("Failed to load sample .reee: %s" % result.error_message)
+		return
+	_last_recording = result.recording
+	_load_recording_into_player(_last_recording)
+	if auto_play:
+		_set_replay_mode(true)
+		_player.play(1.0)
+		_update_status("Playing premade sample (%.2fs, %d events)." % [
+			_last_recording.get_duration_seconds(),
+			_last_recording.events.size(),
+		])
+	else:
+		_update_status("Premade sample loaded (%.2fs, %d events). Press Space to play or R to record." % [
+			_last_recording.get_duration_seconds(),
+			_last_recording.events.size(),
+		])
+
+
 func _load_recording_into_player(rec: REEEplayRecording) -> void:
 	if _player != null and is_instance_valid(_player):
 		_player.queue_free()
@@ -272,6 +299,7 @@ func _load_recording_into_player(rec: REEEplayRecording) -> void:
 	_player.camera = _replay_camera
 
 	_player.time_changed.connect(_on_player_time_changed)
+	_player.event_reached.connect(_on_player_event_reached)
 	_player.playback_started.connect(func() -> void: btn_play.text = "Pause (Space)")
 	_player.playback_paused.connect(func() -> void: btn_play.text = "Play (Space)")
 
@@ -347,6 +375,12 @@ func _on_player_time_changed(current_seconds: float, duration_seconds: float) ->
 	if not _is_scrubbing:
 		scrub_slider.set_value_no_signal(current_seconds)
 	time_label.text = "%.2fs / %.2fs (t=%d)" % [current_seconds, duration_seconds, _player.current_tick]
+
+
+func _on_player_event_reached(ev: REEEplayEvent) -> void:
+	if ev == null:
+		return
+	_update_status("Event [t=%d]: %s (%s)" % [ev.tick, ev.get_timeline_label(), ev.get_type_id()])
 
 
 func _refresh_damage_recap(dlog: REEEplayDamageLog, victim_id: int) -> void:

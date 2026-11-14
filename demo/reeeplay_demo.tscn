@@ -102,7 +102,11 @@ text = "Save .reee"
 
 [node name="BtnLoad" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
 layout_mode = 2
-text = "Load .reee"
+text = "Load Saved"
+
+[node name="BtnLoadSample" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
+layout_mode = 2
+text = "Load Sample"
 
 [node name="BtnLive" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
 layout_mode = 2
@@ -138,3 +142,4 @@ layout_mode = 2
 bbcode_enabled = true
 text = "Damage Log: empty"
 fit_content = true
+

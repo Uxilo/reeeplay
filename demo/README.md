@@ -7,6 +7,10 @@ A self-contained 3D demo showing live recording, `.reee` save/load, isolated `RE
 1. Open `res://addons/reeeplay/demo/reeeplay_demo.tscn` in Godot.
 2. Press **F6** (**Run Current Scene**).
 
+## Premade Sample Playback
+
+A premade 5-second recording (`res://addons/reeeplay/demo/sample_playback.reee`) with markers (`Round Start`, `First Clash`, `Hazard Spike`, `Clutch Heal`, `Finish`), a recording note, and multi-source combat/environmental damage & heal entries is loaded automatically on launch — press **Space** or **Load Sample** to watch it immediately.
+
 ## Controls
 
 - **W / A / S / D** (or Arrow Keys): Move the blue `PlayerActor` around the arena while the orange `OrbiterActor` orbits automatically.
@@ -23,3 +27,4 @@ A self-contained 3D demo showing live recording, `.reee` save/load, isolated `RE
 - `REEEplaySession` — owns `REEEplayRecorder`, tracks `PlayerActor` & `OrbiterActor`, and logs damage/heal/marker events.
 - `REEEplayTracked` — child components on `PlayerActor` and `OrbiterActor` showing standard scene authoring.
 - `REEEplayStage` + `REEEplayPlayer` + `REEEplayCamera` — isolated playback stage with orbit camera and interpolated proxies.
+
