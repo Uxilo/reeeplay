@@ -87,6 +87,7 @@ func _run_all() -> void:
 	_run_test("ProxyFactory Sanitization + Stage + Camera", _test_proxy_sanitization_and_camera)
 	_run_test("Manager + Session + 2D Stage + Tracked + Clock", _test_manager_session_and_2d)
 	_run_test("Editor Dock, Authoring & Inspector Plugin", _test_editor_dock_and_inspector)
+	_run_test("Demo Scene Record, Save/Load .reee & Playback", _test_demo_scene)
 
 	print("=== Results: %d passed, %d failed ===" % [_passed, _failures.size()])
 	for f in _failures:
@@ -817,3 +818,45 @@ func _test_editor_dock_and_inspector() -> void:
 	n3.free()
 	root.remove_child(dock)
 	dock.free()
+
+
+func _test_demo_scene() -> void:
+	var packed := ResourceLoader.load("res://addons/reeeplay/demo/reeeplay_demo.tscn") as PackedScene
+	_assert(packed != null, "Demo scene PackedScene should load")
+	if packed == null:
+		return
+	var demo := packed.instantiate()
+	_assert(demo != null, "Demo scene should instantiate")
+	root.add_child(demo)
+
+	# Record for 6 physics frames (~0.1s), then stop into replay mode.
+	demo._on_record_pressed()
+	_assert(demo.session.is_recording(), "Demo should enter recording state")
+	for _i in range(6):
+		demo._physics_process(1.0 / 60.0)
+		demo.session._physics_process(1.0 / 60.0)
+	demo._emit_demo_combat_exchange()
+	demo._on_record_pressed()
+
+	_assert(not demo.session.is_recording(), "Demo should stop recording on second toggle")
+	_assert(demo._last_recording != null, "Demo should store last_recording")
+	_assert(demo._in_replay_mode, "Demo should switch into replay mode after stopping")
+	_assert(demo._player != null and demo._player.is_playing, "Demo replay player should be playing")
+
+	var tmp_path := "user://reeeplay_demo_test.reee"
+	var err := REEEplayWriter.save_file(demo._last_recording, tmp_path, true)
+	_assert(err == OK, "Demo recording should save to .reee")
+	var read_res := REEEplayReader.load_file(tmp_path)
+	_assert(read_res.error == REEEplayFormat.LoadError.OK and read_res.recording != null, "Demo .reee should load back cleanly")
+	if read_res.recording != null:
+		_assert(read_res.recording.damage_log.entries.size() >= 3, "Demo .reee should preserve combat damage log entries")
+		demo._load_recording_into_player(read_res.recording)
+		demo._player.seek_to_time(0.05)
+		_assert(demo._player.get_proxy(demo._player_entity_id) != null, "Demo replay stage should spawn Player proxy")
+
+	if demo._player != null:
+		demo._player.stop_and_clear()
+	if FileAccess.file_exists(tmp_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_path))
+	root.remove_child(demo)
+	demo.free()

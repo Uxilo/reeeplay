@@ -1,0 +1,140 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://addons/reeeplay/demo/reeeplay_demo.gd" id="1_demo"]
+[ext_resource type="Script" path="res://addons/reeeplay/core/reeeplay_session.gd" id="2_session"]
+[ext_resource type="Script" path="res://addons/reeeplay/core/reeeplay_tracked.gd" id="3_tracked"]
+[ext_resource type="Script" path="res://addons/reeeplay/playback/reeeplay_stage.gd" id="4_stage"]
+
+[sub_resource type="Environment" id="Environment_demo"]
+background_mode = 1
+background_color = Color(0.08, 0.09, 0.12, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.75, 0.8, 0.9, 1)
+ambient_light_energy = 0.5
+
+[node name="REEEplayDemo" type="Node3D"]
+script = ExtResource("1_demo")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_demo")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 10, 0)
+shadow_enabled = true
+
+[node name="LiveWorld" type="Node3D" parent="."]
+
+[node name="ArenaFloor" type="MeshInstance3D" parent="LiveWorld"]
+
+[node name="LiveCamera" type="Camera3D" parent="LiveWorld"]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 8, 12)
+current = true
+
+[node name="PlayerActor" type="Node3D" parent="LiveWorld"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0, 0)
+
+[node name="REEEplayTracked" type="Node" parent="LiveWorld/PlayerActor"]
+script = ExtResource("3_tracked")
+archetype_id = &"DemoPlayer"
+display_name = "Player"
+
+[node name="OrbiterActor" type="Node3D" parent="LiveWorld"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0.35, 0)
+
+[node name="REEEplayTracked" type="Node" parent="LiveWorld/OrbiterActor"]
+script = ExtResource("3_tracked")
+archetype_id = &"DemoOrbiter"
+display_name = "Orbiter"
+
+[node name="REEEplaySession" type="Node" parent="."]
+script = ExtResource("2_session")
+
+[node name="REEEplayStage" type="Node3D" parent="."]
+visible = false
+script = ExtResource("4_stage")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Panel" type="PanelContainer" parent="HUD"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 560.0
+offset_bottom = 264.0
+
+[node name="Margin" type="MarginContainer" parent="HUD/Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="HUD/Panel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="HeaderRow" type="HBoxContainer" parent="HUD/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="HUD/Panel/Margin/VBox/HeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "REEEplay Demo  (WASD Move | H Hit | J Heal)"
+
+[node name="ModeLabel" type="Label" parent="HUD/Panel/Margin/VBox/HeaderRow"]
+layout_mode = 2
+text = "[LIVE]"
+
+[node name="StatusLabel" type="Label" parent="HUD/Panel/Margin/VBox"]
+layout_mode = 2
+text = "Ready."
+autowrap_mode = 2
+
+[node name="RecordRow" type="HBoxContainer" parent="HUD/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="BtnRecord" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
+layout_mode = 2
+text = "Record (R)"
+
+[node name="BtnSave" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
+layout_mode = 2
+text = "Save .reee"
+
+[node name="BtnLoad" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
+layout_mode = 2
+text = "Load .reee"
+
+[node name="BtnLive" type="Button" parent="HUD/Panel/Margin/VBox/RecordRow"]
+layout_mode = 2
+text = "Back to Live"
+
+[node name="PlaybackRow" type="HBoxContainer" parent="HUD/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="BtnPlay" type="Button" parent="HUD/Panel/Margin/VBox/PlaybackRow"]
+layout_mode = 2
+text = "Play (Space)"
+
+[node name="BtnStop" type="Button" parent="HUD/Panel/Margin/VBox/PlaybackRow"]
+layout_mode = 2
+text = "Stop"
+
+[node name="SpeedOption" type="OptionButton" parent="HUD/Panel/Margin/VBox/PlaybackRow"]
+layout_mode = 2
+
+[node name="TimeLabel" type="Label" parent="HUD/Panel/Margin/VBox/PlaybackRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 2
+text = "0.00s / 0.00s"
+
+[node name="ScrubSlider" type="HSlider" parent="HUD/Panel/Margin/VBox"]
+layout_mode = 2
+step = 0.01
+
+[node name="RecapLabel" type="RichTextLabel" parent="HUD/Panel/Margin/VBox"]
+custom_minimum_size = Vector2(0, 88)
+layout_mode = 2
+bbcode_enabled = true
+text = "Damage Log: empty"
+fit_content = true
