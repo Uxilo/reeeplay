@@ -103,6 +103,25 @@ func record_heal(
 	return recorder.get_damage_tracker().record_heal(healer, target_entity, amount, source_name, options)
 
 
+func record_environmental_damage(
+	victim: Variant,
+	amount: float,
+	damage_type: StringName = &"environment",
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	return recorder.get_damage_tracker().record_environmental_damage(victim, amount, damage_type, source_name, options)
+
+
+func record_environmental_heal(
+	target_entity: Variant,
+	amount: float,
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	return recorder.get_damage_tracker().record_environmental_heal(target_entity, amount, source_name, options)
+
+
 func get_damage_log() -> REEEplayDamageLog:
 	return recorder.get_damage_tracker().log
 

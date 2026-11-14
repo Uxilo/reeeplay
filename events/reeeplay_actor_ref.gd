@@ -1,6 +1,6 @@
 class_name REEEplayActorRef
 extends RefCounted
-## Lightweight snapshot identifying an entity/player involved in a recorded event or damage entry.
+## Lightweight snapshot identifying an entity, player, or environmental hazard involved in an event.
 
 var entity_id: int = 0
 var archetype_id: StringName = &""
@@ -8,6 +8,7 @@ var player_id: String = ""
 var display_name: String = ""
 var team_id: int = -1
 var is_anonymous: bool = false
+var is_environmental: bool = false
 
 
 static func create(
@@ -15,7 +16,8 @@ static func create(
 	p_display_name: String = "",
 	p_player_id: String = "",
 	p_team_id: int = -1,
-	p_archetype_id: StringName = &""
+	p_archetype_id: StringName = &"",
+	p_is_environmental: bool = false
 ) -> REEEplayActorRef:
 	var ref := REEEplayActorRef.new()
 	ref.entity_id = p_entity_id
@@ -23,6 +25,7 @@ static func create(
 	ref.player_id = p_player_id
 	ref.team_id = p_team_id
 	ref.archetype_id = p_archetype_id
+	ref.is_environmental = p_is_environmental
 	return ref
 
 
@@ -33,6 +36,26 @@ static func anonymous(label: String = "Environment") -> REEEplayActorRef:
 	return ref
 
 
+static func environmental(hazard_name: String = "Environment") -> REEEplayActorRef:
+	var ref := REEEplayActorRef.new()
+	ref.entity_id = 0
+	ref.display_name = hazard_name if not hazard_name.is_empty() else "Environment"
+	ref.is_anonymous = true
+	ref.is_environmental = true
+	return ref
+
+
+## Returns a stable deduplication key distinguishing tracked entities and named environmental hazards.
+func actor_key() -> String:
+	if is_environmental:
+		return "env:%s" % (display_name if not display_name.is_empty() else "Environment")
+	if entity_id > 0:
+		return "entity:%d" % entity_id
+	if not display_name.is_empty():
+		return display_name
+	return "entity:0"
+
+
 ## Returns an anonymized shallow copy for privacy/tournament exports.
 func anonymized(alias: String = "") -> REEEplayActorRef:
 	var copy := REEEplayActorRef.new()
@@ -40,7 +63,11 @@ func anonymized(alias: String = "") -> REEEplayActorRef:
 	copy.archetype_id = archetype_id
 	copy.team_id = team_id
 	copy.player_id = ""
-	copy.display_name = alias if not alias.is_empty() else ("Entity_%d" % entity_id)
+	copy.is_environmental = is_environmental
+	if is_environmental:
+		copy.display_name = alias if not alias.is_empty() else (display_name if not display_name.is_empty() else "Environment")
+	else:
+		copy.display_name = alias if not alias.is_empty() else ("Entity_%d" % entity_id)
 	copy.is_anonymous = true
 	return copy
 
@@ -53,6 +80,7 @@ func duplicate_ref() -> REEEplayActorRef:
 	copy.display_name = display_name
 	copy.team_id = team_id
 	copy.is_anonymous = is_anonymous
+	copy.is_environmental = is_environmental
 	return copy
 
 
@@ -63,7 +91,12 @@ func serialize(buf: StreamPeerBuffer, string_table: REEEplayByteUtils.StringTabl
 	REEEplayByteUtils.put_utf8(buf, player_id)
 	REEEplayByteUtils.put_utf8(buf, display_name)
 	REEEplayByteUtils.put_varint(buf, team_id)
-	buf.put_u8(1 if is_anonymous else 0)
+	var flags := 0
+	if is_anonymous:
+		flags |= 1
+	if is_environmental:
+		flags |= 2
+	buf.put_u8(flags)
 
 
 static func deserialize(buf: StreamPeerBuffer, string_table: REEEplayByteUtils.StringTable) -> REEEplayActorRef:
@@ -75,5 +108,7 @@ static func deserialize(buf: StreamPeerBuffer, string_table: REEEplayByteUtils.S
 	ref.player_id = REEEplayByteUtils.get_utf8(buf)
 	ref.display_name = REEEplayByteUtils.get_utf8(buf)
 	ref.team_id = REEEplayByteUtils.get_varint(buf)
-	ref.is_anonymous = buf.get_u8() != 0
+	var flags := buf.get_u8()
+	ref.is_anonymous = (flags & 1) != 0
+	ref.is_environmental = (flags & 2) != 0
 	return ref

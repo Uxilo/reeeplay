@@ -113,6 +113,25 @@ func record_heal(
 	return default_session.record_heal(healer, target_entity, amount, source_name, options)
 
 
+func record_environmental_damage(
+	victim: Variant,
+	amount: float,
+	damage_type: StringName = &"environment",
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	return default_session.record_environmental_damage(victim, amount, damage_type, source_name, options)
+
+
+func record_environmental_heal(
+	target_entity: Variant,
+	amount: float,
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	return default_session.record_environmental_heal(target_entity, amount, source_name, options)
+
+
 func add_attachment(att: REEEplayAttachment) -> void:
 	default_session.add_attachment(att)
 

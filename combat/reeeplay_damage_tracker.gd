@@ -1,6 +1,6 @@
 class_name REEEplayDamageTracker
 extends RefCounted
-## Live combat tracker capturing damage/healing entries and optional yeet-cpp hitbox router hits.
+## Live combat tracker capturing multi-attacker damage, multi-healer healing, and environmental hazards.
 
 signal entry_recorded(entry: REEEplayDamageEntry)
 
@@ -45,7 +45,43 @@ func record_heal(
 	source_name: String = "",
 	options: Dictionary = {}
 ) -> REEEplayDamageEntry:
-	return _record_internal(true, healer, target_entity, amount, &"heal", source_name, options)
+	var dmg_type := StringName(options.get("damage_type", &"heal"))
+	return _record_internal(true, healer, target_entity, amount, dmg_type, source_name, options)
+
+
+## Records environmental / hazard damage (e.g. lava, fall, trap) attributed to the environment.
+func record_environmental_damage(
+	victim: Variant,
+	amount: float,
+	damage_type: StringName = &"environment",
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	var opts := options.duplicate()
+	opts["is_environmental"] = true
+	var env_name := str(opts.get("environment_name", source_name if not source_name.is_empty() else "Environment"))
+	var env_actor := opts.get("environment_actor", REEEplayActorRef.environmental(env_name))
+	return _record_internal(false, env_actor, victim, amount, damage_type, source_name, opts)
+
+
+## Records environmental healing (e.g. healing fountain, shrine, regeneration zone).
+func record_environmental_heal(
+	target_entity: Variant,
+	amount: float,
+	source_name: String = "Environment",
+	options: Dictionary = {}
+) -> REEEplayDamageEntry:
+	var opts := options.duplicate()
+	opts["is_environmental"] = true
+	var env_name := str(opts.get("environment_name", source_name if not source_name.is_empty() else "Environment"))
+	var env_actor := opts.get("environment_actor", REEEplayActorRef.environmental(env_name))
+	return _record_internal(true, env_actor, target_entity, amount, StringName(opts.get("damage_type", &"heal")), source_name, opts)
+
+
+func get_actor_summary(actor_or_id: Variant, from_tick: int = 0, to_tick: int = 2147483647) -> Dictionary:
+	var ref := _resolve_actor(actor_or_id)
+	var key := ref.actor_key() if ref != null else "entity:0"
+	return log.get_actor_summary(key, from_tick, to_tick)
 
 
 ## Connects to a YeetNativeHitboxRouter (or any Node emitting hit events) without hard compile dependency.
@@ -82,7 +118,7 @@ func _record_internal(
 	entry.hit_id = _next_hit_id
 	_next_hit_id += 1
 	entry.tick = int(options.get("tick", _current_tick()))
-	entry.is_heal = p_is_heal
+	entry.kind = REEEplayDamageEntry.Kind.HEAL if p_is_heal else (int(options.get("kind", REEEplayDamageEntry.Kind.DAMAGE)) as REEEplayDamageEntry.Kind)
 	entry.amount = p_amount
 	entry.raw_amount = float(options.get("raw_amount", p_amount))
 	entry.absorbed = float(options.get("absorbed", maxf(0.0, entry.raw_amount - p_amount)))
@@ -95,8 +131,27 @@ func _record_internal(
 	entry.victim_hp_after = float(options.get("victim_hp_after", 0.0))
 	entry.position = options.get("position", null)
 
-	entry.attacker = _resolve_actor(p_attacker)
+	entry.attacker = _resolve_actor(p_attacker, p_source_name)
 	entry.victim = _resolve_actor(p_victim)
+
+	var is_env := bool(options.get("is_environmental", false))
+	if entry.attacker != null and entry.attacker.is_environmental:
+		is_env = true
+	elif p_attacker == null:
+		is_env = true
+	elif (p_attacker is String or p_attacker is StringName) and (entry.attacker == null or entry.attacker.entity_id <= 0):
+		is_env = true
+	elif p_attacker is Node and is_instance_valid(p_attacker):
+		var n := p_attacker as Node
+		if n.is_in_group(&"environment") or n.is_in_group(&"hazard"):
+			is_env = true
+
+	entry.is_environmental = is_env
+	if is_env and entry.attacker != null:
+		entry.attacker.is_environmental = true
+		entry.attacker.is_anonymous = true
+		if entry.attacker.display_name.is_empty():
+			entry.attacker.display_name = p_source_name if not p_source_name.is_empty() else "Environment"
 
 	if entry.position == null and p_victim is Node3D:
 		var v3 := p_victim as Node3D
@@ -105,15 +160,19 @@ func _record_internal(
 		var v2 := p_victim as Node2D
 		entry.position = v2.global_position if v2.is_inside_tree() else v2.position
 
+	var tags_out: Array[StringName] = []
 	if entry.is_killing_blow:
 		entry.importance = 3.0
-		entry.tags = [&"kill", &"combat"]
+		tags_out = [&"kill", &"combat"]
 	elif entry.is_critical:
 		entry.importance = 2.0
-		entry.tags = [&"crit", &"combat"]
+		tags_out = [&"crit", &"combat"]
 	else:
 		entry.importance = 0.5 if p_is_heal else 1.0
-		entry.tags = [&"heal" if p_is_heal else &"combat"]
+		tags_out = [&"heal" if p_is_heal else &"combat"]
+	if is_env:
+		tags_out.append(&"environment")
+	entry.tags = tags_out
 
 	log.add_entry(entry)
 	if _event_sink.is_valid():
@@ -128,7 +187,7 @@ func _current_tick() -> int:
 	return 0
 
 
-func _resolve_actor(actor_or_node: Variant) -> REEEplayActorRef:
+func _resolve_actor(actor_or_node: Variant, fallback_env_label: String = "") -> REEEplayActorRef:
 	if actor_or_node is REEEplayActorRef:
 		return actor_or_node as REEEplayActorRef
 	if _actor_resolver.is_valid():
@@ -139,9 +198,14 @@ func _resolve_actor(actor_or_node: Variant) -> REEEplayActorRef:
 		return REEEplayActorRef.create(int(actor_or_node))
 	if actor_or_node is Node:
 		var node := actor_or_node as Node
-		return REEEplayActorRef.create(0, node.name)
+		var is_env := node.is_in_group(&"environment") or node.is_in_group(&"hazard")
+		return REEEplayActorRef.create(0, node.name, "", -1, &"", is_env)
 	if actor_or_node == null:
-		return REEEplayActorRef.anonymous()
+		var env_name := fallback_env_label if not fallback_env_label.is_empty() else "Environment"
+		return REEEplayActorRef.environmental(env_name)
+	if actor_or_node is String or actor_or_node is StringName:
+		var label := String(actor_or_node)
+		return REEEplayActorRef.environmental(label if not label.is_empty() else "Environment")
 	return REEEplayActorRef.create(0, str(actor_or_node))
 
 
@@ -170,6 +234,8 @@ func _on_yeet_hit_signal(hit_payload: Variant) -> void:
 			opts["is_critical"] = bool(d["is_critical"])
 		if d.has("is_killing_blow"):
 			opts["is_killing_blow"] = bool(d["is_killing_blow"])
+		if bool(d.get("is_environmental", false)) or attacker_v == null:
+			opts["is_environmental"] = true
 	elif hit_payload is Object:
 		var obj := hit_payload as Object
 		attacker_v = obj.get(&"attacker")
@@ -182,5 +248,7 @@ func _on_yeet_hit_signal(hit_payload: Variant) -> void:
 		var hz: Variant = obj.get(&"hit_zone")
 		if hz != null:
 			opts["hit_zone"] = StringName(hz)
+		if attacker_v == null:
+			opts["is_environmental"] = true
 
 	record_damage(attacker_v, victim_v, dmg, dmg_type, src, opts)

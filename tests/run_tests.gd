@@ -317,18 +317,39 @@ func _test_events_and_registry() -> void:
 
 func _test_damage_logs() -> void:
 	var tick_now := 100
+	var events_captured: Array[REEEplayEvent] = []
 	var dt := REEEplayDamageTracker.new()
-	dt.configure(func() -> int: return tick_now)
+	dt.configure(
+		func() -> int: return tick_now,
+		Callable(),
+		func(ev: REEEplayEvent) -> void: events_captured.append(ev)
+	)
 
 	var a1 := REEEplayActorRef.create(1, "AttackerA", "p1", 1)
 	var a2 := REEEplayActorRef.create(2, "SupportB", "p2", 1)
 	var vic := REEEplayActorRef.create(3, "VictimC", "p3", 2)
+	var vic2 := REEEplayActorRef.create(4, "VictimD", "p4", 2)
 
+	# Multi-dealer, multi-source damage on VictimC (entities + environment)
 	dt.record_damage(a2, vic, 25.0, &"fire", "Molotov", {"tick": 100})
-	dt.record_heal(a2, vic, 10.0, "Medkit", {"tick": 115})
+	dt.record_damage(a1, vic, 30.0, &"explosive", "Frag Grenade", {"tick": 105})
+	dt.record_environmental_damage(vic, 20.0, &"fire", "Lava", {"tick": 110})
+	dt.record_environmental_damage(vic, 15.0, &"impact", "Falling Debris", {"tick": 112})
+
+	# Multi-healer, multi-source healing on VictimC (allied, self, environment)
+	dt.record_heal(a2, vic, 12.0, "Medigun", {"tick": 115})
+	dt.record_heal(a2, vic, 8.0, "Healing Grenade", {"tick": 116})
+	dt.record_heal(vic, vic, 14.0, "Stimpack", {"tick": 118})
+	dt.record_environmental_heal(vic, 16.0, "Healing Shrine", {"tick": 120})
+
+	# Fatal blow by AttackerA using a second weapon source
 	dt.record_damage(a1, vic, 85.0, &"ballistic", "Railgun", {"tick": 130, "is_critical": true, "is_killing_blow": true})
 
-	# Test yeet-cpp style Dictionary hit payload routing via _on_yeet_hit_signal.
+	# Separate scenario: VictimD killed by environment after player damage (assists must credit AttackerA)
+	dt.record_damage(a1, vic2, 45.0, &"melee", "Dropkick", {"tick": 140})
+	dt.record_environmental_damage(vic2, 60.0, &"crush", "Falling Debris", {"tick": 150, "is_killing_blow": true})
+
+	# Test yeet-cpp style Dictionary hit payload routing via _on_yeet_hit_signal (both entity & null env attacker)
 	dt._on_yeet_hit_signal({
 		"attacker": a1,
 		"victim": a2,
@@ -337,14 +358,72 @@ func _test_damage_logs() -> void:
 		"move_name": "Dropkick",
 		"is_critical": true,
 	})
+	dt._on_yeet_hit_signal({
+		"attacker": null,
+		"victim": a2,
+		"damage": 15.0,
+		"damage_type": &"hazard",
+		"move_name": "Spike Trap",
+	})
 
 	var recap := dt.log.death_recap(3, 130, 30, 10.0, 5.0)
 	_assert(recap["killer"] != null and (recap["killer"] as REEEplayActorRef).entity_id == 1, "Death recap killer mismatch")
-	_assert((recap["assists"] as Array).size() == 1 and ((recap["assists"] as Array)[0] as REEEplayActorRef).entity_id == 2, "Death recap assists mismatch")
-	_assert_near(float(recap["total_damage"]), 110.0, 0.01, "Death recap total damage mismatch")
+	# Assists on VictimC should include SupportB, Lava, and Falling Debris (3 distinct non-killer damage dealers)
+	_assert((recap["assists"] as Array).size() == 3, "Expected 3 assists (SupportB + Lava + Falling Debris), got %d" % (recap["assists"] as Array).size())
+	_assert_near(float(recap["total_damage"]), 175.0, 0.01, "Death recap total damage mismatch")
+	_assert_near(float(recap["total_healing"]), 50.0, 0.01, "Death recap total healing mismatch")
+	_assert_near(float(recap["environmental_damage"]), 35.0, 0.01, "Death recap environmental_damage mismatch")
+	_assert_near(float(recap["environmental_healing"]), 16.0, 0.01, "Death recap environmental_healing mismatch")
 	_assert_near(float(recap["ttk_seconds"]), 1.0, 0.01, "Death recap TTK mismatch (30 ticks @ 30Hz = 1.0s)")
-	_assert(dt.log.total_damage_by_entity(1) == 125.0, "Attacker 1 total damage mismatch")
-	_assert(dt.log.total_healing_by_entity(2) == 10.0, "Healer 2 total healing mismatch")
+
+	var dealers: Array = recap["damage_dealers"]
+	_assert(dealers.size() == 4, "Expected 4 damage dealers (AttackerA, SupportB, Lava, Falling Debris)")
+	var top_dealer: Dictionary = dealers[0]
+	_assert(int(top_dealer["entity_id"]) == 1 and float(top_dealer["total_damage"]) == 115.0, "Top dealer should be AttackerA with 115")
+	_assert(float((top_dealer["sources"] as Dictionary).get("Railgun", 0.0)) == 85.0 and float((top_dealer["sources"] as Dictionary).get("Frag Grenade", 0.0)) == 30.0, "Per-dealer multi-source breakdown mismatch")
+
+	var healers: Array = recap["healers"]
+	_assert(healers.size() == 3, "Expected 3 healers (SupportB, Healing Shrine, VictimC self-heal)")
+	_assert(float((recap["by_healer"] as Dictionary).get("SupportB", 0.0)) == 20.0, "SupportB healing sum mismatch")
+	_assert(float((recap["by_healer"] as Dictionary).get("Healing Shrine", 0.0)) == 16.0, "Environmental healing mismatch")
+	_assert(float((recap["by_healer"] as Dictionary).get("VictimC", 0.0)) == 14.0, "Self-heal mismatch")
+	var found_self := false
+	var found_env_heal := false
+	for h in healers:
+		var hd: Dictionary = h
+		if int(hd["entity_id"]) == 3 and bool(hd["is_self_heal"]):
+			found_self = true
+		if bool(hd["is_environmental"]) and float(hd["total_healing"]) == 16.0:
+			found_env_heal = true
+	_assert(found_self and found_env_heal, "Healers list should distinguish self-heal and environmental heal")
+
+	var env_recap := dt.log.death_recap(4, 150, 30, 10.0, 5.0)
+	_assert(env_recap["killer"] != null and (env_recap["killer"] as REEEplayActorRef).is_environmental, "VictimD killer should be environmental")
+	_assert((env_recap["assists"] as Array).size() == 1 and ((env_recap["assists"] as Array)[0] as REEEplayActorRef).entity_id == 1, "VictimD environmental kill should still credit AttackerA assist")
+
+	_assert(dt.log.entries_from_environment(3).size() == 3, "VictimC should have 3 environmental entries (2 dmg + 1 heal)")
+	_assert(dt.log.get_sources_breakdown(3).size() == 9, "VictimC should have 9 distinct (actor, source, kind) rows")
+	var a1_sum := dt.get_actor_summary(a1)
+	_assert_near(float(a1_sum["damage_dealt"]), 200.0, 0.01, "AttackerA actor summary damage mismatch")
+	_assert_near(dt.log.total_damage_by_entity(1), 200.0, 0.01, "Attacker 1 total damage mismatch")
+	_assert_near(dt.log.total_healing_by_entity(2), 20.0, 0.01, "Healer 2 total healing mismatch")
+
+	# Binary serialization round-trip check via REEEplayEventRegistry preserving is_environmental & kind
+	var reg := REEEplayEventRegistry.new(true)
+	var st := REEEplayByteUtils.StringTable.new()
+	var sbuf := StreamPeerBuffer.new()
+	sbuf.big_endian = false
+	for ev in events_captured:
+		reg.serialize_event(sbuf, ev, st)
+	sbuf.seek(0)
+	var decoded_events: Array[REEEplayEvent] = []
+	for _i in range(events_captured.size()):
+		decoded_events.append(reg.deserialize_event(sbuf, st))
+	var rebuilt := REEEplayDamageLog.from_events(decoded_events)
+	var rebuilt_recap := rebuilt.death_recap(3, 130, 30, 10.0, 5.0)
+	_assert_near(float(rebuilt_recap["environmental_damage"]), 35.0, 0.01, "Binary round-trip lost environmental_damage")
+	_assert_near(float(rebuilt_recap["environmental_healing"]), 16.0, 0.01, "Binary round-trip lost environmental_healing")
+	_assert(dt.log.entries_from_environment(2).size() == 1, "Yeet null attacker should record environmental entry")
 
 
 func _test_recorder_features() -> void:
