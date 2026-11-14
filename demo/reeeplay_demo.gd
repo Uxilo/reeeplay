@@ -387,17 +387,17 @@ func _refresh_damage_recap(dlog: REEEplayDamageLog, victim_id: int) -> void:
 	if dlog == null or victim_id <= 0:
 		recap_label.text = "Damage Log: empty"
 		return
-	var victim_entries: Array[REEEplayDamageEntry] = dlog.entries_for_victim(victim_id)
-	var total_dmg := 0.0
-	var total_heal := 0.0
-	for e in victim_entries:
-		if e.is_heal:
-			total_heal += e.amount
-		else:
-			total_dmg += e.amount
+	var tick_rate: int = _last_recording.tick_rate if _last_recording != null else 60
+	var recap := dlog.death_recap(victim_id, 999999, tick_rate, 3600.0)
+	var victim_entries: Array = recap.get("entries", [])
+	var by_src: Dictionary = recap.get("by_source", {})
 	var lines := PackedStringArray([
-		"[b]Damage Recap (Entity %d)[/b]  Dmg: %.1f | Heal: %.1f | Entries: %d" % [
-			victim_id, total_dmg, total_heal, dlog.entries.size()
+		"[b]REEEplayDamageLog Recap (Entity %d)[/b]  Dmg: %.1f (Env: %.1f) | Heal: %.1f | Sources: %d" % [
+			victim_id,
+			float(recap.get("total_damage", 0.0)),
+			float(recap.get("environmental_damage", 0.0)),
+			float(recap.get("total_healing", 0.0)),
+			by_src.size(),
 		]
 	])
 	var start_idx := maxi(0, victim_entries.size() - 3)
