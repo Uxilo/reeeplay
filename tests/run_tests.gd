@@ -832,8 +832,8 @@ func _test_demo_scene() -> void:
 	# Premade sample_playback.reee should be preloaded on _ready() with events and damage entries.
 	_assert(demo._last_recording != null, "Demo should preload sample_playback.reee on ready")
 	if demo._last_recording != null:
-		_assert(demo._last_recording.events.size() >= 10, "Premade sample should contain timeline events")
-		_assert(demo._last_recording.damage_log.entries.size() >= 5, "Premade sample should contain combat damage/heal entries")
+		_assert(demo._last_recording.events.size() >= 5, "Premade sample should contain timeline events")
+		_assert(demo._last_recording.damage_log.entries.size() >= 3, "Premade sample should contain combat damage/heal entries")
 
 	# Record for 6 physics frames (~0.1s), then stop into replay mode.
 	demo._on_record_pressed()

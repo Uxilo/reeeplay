@@ -9,7 +9,7 @@ A self-contained 3D demo showing live recording, `.reee` save/load, isolated `RE
 
 ## Premade Sample Playback
 
-A premade 5-second recording (`res://addons/reeeplay/demo/sample_playback.reee`) with markers (`Round Start`, `First Clash`, `Hazard Spike`, `Clutch Heal`, `Finish`), a recording note, and multi-source combat/environmental damage & heal entries is loaded automatically on launch — press **Space** or **Load Sample** to watch it immediately.
+A premade 10-second recording (`res://addons/reeeplay/demo/sample_playback.reee`) with 5 well-spaced events (start/finish markers, Orbiter fire hit, floor hazard hit, and heal) is loaded automatically on launch — press **Space** or **Load Sample** to watch it immediately.
 
 ## Controls
 
