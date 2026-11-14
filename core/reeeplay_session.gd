@@ -1,3 +1,4 @@
+@tool
 class_name REEEplaySession
 extends Node
 ## High-level Node wrapper owning a REEEplayRecorder and fixed-step physics progression.
@@ -6,6 +7,15 @@ signal recording_started(recording: REEEplayRecording)
 signal recording_stopped(recording: REEEplayRecording)
 signal recording_saved(path: String, error: int)
 
+@export var preset_kind: REEEplayPreset.Kind = REEEplayPreset.Kind.CUSTOM:
+	set(value):
+		preset_kind = value
+		update_configuration_warnings()
+@export var custom_preset: REEEplayPreset = null
+@export var rate_policy: REEEplayRatePolicy = null
+@export var auto_start_on_ready: bool = false
+@export var auto_save_on_exit: bool = false
+
 var recorder: REEEplayRecorder = REEEplayRecorder.new()
 var last_recording: REEEplayRecording = null
 var active_player: REEEplayPlayer = null
@@ -13,12 +23,45 @@ var _preset_kind_override: int = -1
 
 
 func _ready() -> void:
+	if Engine.is_editor_hint():
+		return
 	_sync_process_mode()
+	if rate_policy != null:
+		recorder.preset.rate_policy = rate_policy
+	if auto_start_on_ready:
+		var chosen: Variant = custom_preset if (preset_kind == REEEplayPreset.Kind.CUSTOM and custom_preset != null) else int(preset_kind)
+		start_recording(chosen)
+
+
+func _exit_tree() -> void:
+	if Engine.is_editor_hint():
+		return
+	if auto_save_on_exit and recorder.is_recording:
+		var path := ""
+		var mgr := get_tree().root.get_node_or_null("REEEplay") if is_inside_tree() else null
+		if mgr != null and mgr.has_method("build_default_save_path") and recorder.recording != null:
+			path = str(mgr.call("build_default_save_path", recorder.recording))
+		stop_recording(path)
 
 
 func _physics_process(delta: float) -> void:
+	if Engine.is_editor_hint():
+		return
 	if recorder.is_recording:
 		recorder.advance(delta)
+
+
+func _get_configuration_warnings() -> PackedStringArray:
+	var warnings := PackedStringArray()
+	var parent := get_parent()
+	if parent != null:
+		var sibling_count := 0
+		for child in parent.get_children():
+			if child is REEEplaySession:
+				sibling_count += 1
+		if sibling_count > 1:
+			warnings.append("Multiple REEEplaySession nodes found under the same parent.")
+	return warnings
 
 
 func start_recording(preset_or_kind: Variant = null, options: Dictionary = {}) -> REEEplayRecording:
@@ -31,6 +74,8 @@ func start_recording(preset_or_kind: Variant = null, options: Dictionary = {}) -
 		preset = _preset_from_project_settings()
 
 	recorder.preset = preset
+	if rate_policy != null and recorder.preset != null:
+		recorder.preset.rate_policy = rate_policy
 	if not options.has("scene_path") and is_inside_tree() and get_tree().current_scene != null:
 		options["scene_path"] = get_tree().current_scene.scene_file_path
 	_sync_process_mode()

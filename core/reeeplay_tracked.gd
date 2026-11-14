@@ -1,16 +1,36 @@
+@tool
 class_name REEEplayTracked
 extends Node
 ## Drop-in child component that automatically registers its target node with REEEplay when active.
 
 @export var auto_track: bool = true
 @export var archetype_id: StringName = &""
-@export var target_node: Node = null
+@export var archetype: REEEplayArchetype = null:
+	set(value):
+		archetype = value
+		update_configuration_warnings()
+@export var target_node: Node = null:
+	set(value):
+		target_node = value
+		update_configuration_warnings()
+@export var proxy_scene: PackedScene = null:
+	set(value):
+		proxy_scene = value
+		update_configuration_warnings()
+@export var fallback_to_source_scene: bool = true:
+	set(value):
+		fallback_to_source_scene = value
+		update_configuration_warnings()
+@export var sample_rate: float = 0.0
 @export var stable_key: StringName = &""
 @export var display_name: String = ""
 @export var player_id: String = ""
 @export var team_id: int = -1
 @export var priority: int = 0
-@export var custom_channels: Array[REEEplayChannel] = []
+@export var custom_channels: Array[REEEplayChannel] = []:
+	set(value):
+		custom_channels = value
+		update_configuration_warnings()
 @export var despawn_on_exit: bool = true
 
 var entity_id: int = 0
@@ -45,6 +65,11 @@ func register_now() -> int:
 		return 0
 
 	var arch_id := archetype_id
+	if archetype != null and archetype.archetype_id != &"":
+		if mgr.has_method("register_archetype"):
+			mgr.call("register_archetype", archetype)
+		if arch_id == &"":
+			arch_id = archetype.archetype_id
 	if arch_id == &"":
 		if target is Node3D:
 			arch_id = &"Node3D"
@@ -60,9 +85,23 @@ func register_now() -> int:
 		"team_id": team_id,
 		"priority": priority,
 		"channels": custom_channels,
+		"proxy_scene": proxy_scene,
+		"sample_rate": sample_rate,
 	}
 	entity_id = int(mgr.call("track", target, arch_id, opts))
 	return entity_id
+
+
+func _get_configuration_warnings() -> PackedStringArray:
+	var warnings := PackedStringArray()
+	if get_effective_target() == null:
+		warnings.append("REEEplayTracked needs a parent node or assigned target_node.")
+	if proxy_scene == null and (archetype == null or archetype.proxy_scene == null) and not fallback_to_source_scene:
+		warnings.append("No proxy_scene assigned and fallback_to_source_scene is disabled.")
+	var total_channels := custom_channels.size() + (archetype.channels.size() if archetype != null else 0)
+	if total_channels > 64:
+		warnings.append("More than 64 channels configured; maximum recommended is 64.")
+	return warnings
 
 
 func _find_manager() -> Node:

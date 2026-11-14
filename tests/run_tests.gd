@@ -86,6 +86,7 @@ func _run_all() -> void:
 	_run_test("End-to-End Write(.reee zstd+CRC) -> Read -> LoadErrors -> Player Seek/Interp/Slice", _test_e2e_file_and_playback)
 	_run_test("ProxyFactory Sanitization + Stage + Camera", _test_proxy_sanitization_and_camera)
 	_run_test("Manager + Session + 2D Stage + Tracked + Clock", _test_manager_session_and_2d)
+	_run_test("Editor Dock, Authoring & Inspector Plugin", _test_editor_dock_and_inspector)
 
 	print("=== Results: %d passed, %d failed ===" % [_passed, _failures.size()])
 	for f in _failures:
@@ -678,9 +679,13 @@ func _test_proxy_sanitization_and_camera() -> void:
 func _test_manager_session_and_2d() -> void:
 	_assert(REEEplayClock.format_time(125.0) == "2:05", "Clock format mismatch")
 
-	var mgr := REEEplayManager.new()
-	mgr.name = "REEEplay"
-	root.add_child(mgr)
+	var mgr := root.get_node_or_null("REEEplay") as REEEplayManager
+	var created_mgr := false
+	if mgr == null:
+		mgr = REEEplayManager.new()
+		mgr.name = "REEEplay"
+		root.add_child(mgr)
+		created_mgr = true
 
 	var p := REEEplayPreset.from_kind(REEEplayPreset.Kind.CUSTOM)
 	p.tick_rate = 10
@@ -727,4 +732,73 @@ func _test_manager_session_and_2d() -> void:
 	player.stop_and_clear()
 	stage2d.free()
 	sprite.free()
-	mgr.free()
+	if created_mgr:
+		mgr.free()
+
+
+func _test_editor_dock_and_inspector() -> void:
+	var dock := REEEplayDock.new()
+	dock.persist = false
+	dock.build()
+	root.add_child(dock)
+
+	for d: Array in REEEplaySettings.DEFS:
+		var path := str(d[0])
+		_assert(dock._setting_controls.has(path), "REEEplayDock missing control for setting: %s" % path)
+
+	var changed_paths: Array[String] = []
+	dock.setting_changed.connect(func(p: String, _v: Variant) -> void: changed_paths.append(p))
+	dock._apply_project_setting("reeeplay/recording/sample_rate", 45.0)
+	_assert_near(float(ProjectSettings.get_setting("reeeplay/recording/sample_rate")), 45.0, 0.001, "Dock should apply sample_rate to ProjectSettings")
+	_assert(changed_paths.has("reeeplay/recording/sample_rate"), "Dock should emit setting_changed on edit")
+
+	dock._reset_all_settings()
+	_assert_near(float(ProjectSettings.get_setting("reeeplay/recording/sample_rate")), 20.0, 0.001, "Reset all should restore default sample_rate")
+
+	var n3 := Node3D.new()
+	n3.name = "HeroTestNode"
+	var tracked := REEEplayAuthoring.auto_setup_node(n3)
+	_assert(tracked != null and tracked.get_parent() == n3, "auto_setup_node should attach REEEplayTracked child")
+	_assert(tracked.custom_channels.size() >= 3, "auto_setup_node on Node3D should add position, rotation, and visible")
+	_assert(tracked.stable_key == &"HeroTestNode", "auto_setup_node should populate stable_key")
+
+	var added := REEEplayAuthoring.add_channel_preset(tracked, &"velocity_3d")
+	_assert(added == 1, "add_channel_preset(velocity_3d) should add 1 channel")
+	_assert(REEEplayAuthoring.add_channel_preset(tracked, &"velocity_3d") == 0, "add_channel_preset should deduplicate existing channel names")
+
+	var diag := REEEplayAuthoring.diagnose_tracked(tracked)
+	_assert(bool(diag.get("ready", false)), "diagnose_tracked should report ready")
+	_assert(float(diag.get("effective_hz", 0.0)) > 0.0, "diagnose_tracked should compute effective_hz")
+	_assert(float(diag.get("bytes_per_sec", 0.0)) > 0.0, "diagnose_tracked should estimate bytes_per_sec")
+
+	var proxy_res := REEEplayAuthoring.generate_proxy_scene(tracked)
+	_assert(bool(proxy_res.get("ok", false)) and tracked.proxy_scene is PackedScene, "generate_proxy_scene should build a PackedScene")
+
+	var budget := REEEplayAuthoring.estimate_budget(30.0)
+	_assert(float(budget.get("kb_per_sec", 0.0)) > 0.0 and float(budget.get("mb_per_hour", 0.0)) > 0.0, "estimate_budget should compute bandwidth")
+
+	var test_mgr_path := "user://reeeplay_tests/mgr_2d.reee"
+	var insp := REEEplayAuthoring.inspect_reee_file(test_mgr_path)
+	_assert(bool(insp.get("ok", false)), "inspect_reee_file should load saved test replay")
+	_assert((insp.get("entities", []) as Array).size() == 1, "inspect_reee_file should report 1 entity in mgr_2d.reee")
+	dock.inspect_file(test_mgr_path)
+	_assert(dock._rec_output.text.contains("mgr_2d"), "Dock inspect_file should populate recording inspector output")
+
+	var arch := REEEplayArchetype.new()
+	var sess := REEEplaySession.new()
+	var preset := REEEplayPreset.new()
+	var pol := REEEplayRatePolicy.new()
+	_assert(REEEplayInspectorPlugin.can_handle_object(tracked), "InspectorPlugin should handle REEEplayTracked")
+	_assert(REEEplayInspectorPlugin.can_handle_object(arch), "InspectorPlugin should handle REEEplayArchetype")
+	_assert(REEEplayInspectorPlugin.can_handle_object(sess), "InspectorPlugin should handle REEEplaySession")
+	_assert(REEEplayInspectorPlugin.can_handle_object(preset), "InspectorPlugin should handle REEEplayPreset")
+	_assert(REEEplayInspectorPlugin.can_handle_object(pol), "InspectorPlugin should handle REEEplayRatePolicy")
+	_assert(not REEEplayInspectorPlugin.can_handle_object(n3), "InspectorPlugin should not handle generic Node3D")
+	if Engine.is_editor_hint():
+		var plugin_insp := REEEplayInspectorPlugin.new()
+		_assert(plugin_insp._can_handle(tracked), "Editor InspectorPlugin _can_handle should match")
+
+	sess.free()
+	n3.free()
+	root.remove_child(dock)
+	dock.free()
