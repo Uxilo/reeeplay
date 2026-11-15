@@ -43,10 +43,10 @@ const QUICK_SETTING_PATHS := [
 ## Save project.godot after each ProjectSettings edit (disable in headless tests).
 var persist := true
 
-var _setting_controls: Dictionary = {}  # path -> Control (Tab 4: all REEEplaySettings.DEFS)
-var _setting_rows: Dictionary = {}      # path -> Control
-var _quick_controls: Dictionary = {}    # path -> Control (Tab 2: Presets & Budget)
-var _simple_controls: Dictionary = {}   # path -> Control (Tab 1 Simple: Quick Tweaks)
+var _setting_controls: Dictionary = {} # path -> Control (Tab 4: all REEEplaySettings.DEFS)
+var _setting_rows: Dictionary = {} # path -> Control
+var _quick_controls: Dictionary = {} # path -> Control (Tab 2: Presets & Budget)
+var _simple_controls: Dictionary = {} # path -> Control (Tab 1 Simple: Quick Tweaks)
 var _updating_ui := false
 var _advanced_mode := false
 
@@ -998,8 +998,8 @@ func _refresh_presets_and_budget() -> void:
 	if _budget_label != null:
 		_budget_label.text = (
 			"[b]Effective Rate:[/b] %.1f Hz (%d tick/s, div %d)\n"
-			+ "[b]50-Entity Est.:[/b] ~%.1f KB/s  |  ~%.2f MB/min  |  ~%.1f MB/hour\n"
-			+ "[b]CPU & Seek:[/b] ~%.2f ms/peak tick  |  Keyframe interval %.1f s"
+			+"[b]50-Entity Est.:[/b] ~%.1f KB/s  |  ~%.2f MB/min  |  ~%.1f MB/hour\n"
+			+"[b]CPU & Seek:[/b] ~%.2f ms/peak tick  |  Keyframe interval %.1f s"
 		) % [
 			eff_hz, resolved_tick, div,
 			float(est["kb_per_sec"]), float(est["mb_per_min"]), float(est["mb_per_hour"]),

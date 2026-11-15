@@ -135,4 +135,3 @@ static func _find_recording_session(node: Node) -> Node:
 		if hit != null:
 			return hit
 	return null
-
