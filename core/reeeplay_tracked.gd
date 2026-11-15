@@ -34,12 +34,18 @@ extends Node
 @export var despawn_on_exit: bool = true
 
 var entity_id: int = 0
+var _registered_manager: Node = null
 
 
 func _enter_tree() -> void:
-	if Engine.is_editor_hint() or not auto_track:
+	if Engine.is_editor_hint():
 		return
-	register_now()
+	if not is_in_group(&"reeeplay_tracked"):
+		add_to_group(&"reeeplay_tracked")
+	if auto_track:
+		var mgr := _find_manager()
+		if mgr != null and mgr.has_method("is_recording") and bool(mgr.call("is_recording")):
+			register_now_with(mgr)
 
 
 func _exit_tree() -> void:
@@ -57,10 +63,15 @@ func get_effective_target() -> Node:
 
 
 func register_now() -> int:
+	return register_now_with(_find_manager())
+
+
+func register_now_with(mgr: Node, force: bool = false) -> int:
+	if not force and entity_id > 0 and _registered_manager == mgr:
+		return entity_id
 	var target := get_effective_target()
 	if target == null:
 		return 0
-	var mgr := _find_manager()
 	if mgr == null or not mgr.has_method("track"):
 		return 0
 
@@ -89,6 +100,7 @@ func register_now() -> int:
 		"sample_rate": sample_rate,
 	}
 	entity_id = int(mgr.call("track", target, arch_id, opts))
+	_registered_manager = mgr if entity_id > 0 else null
 	return entity_id
 
 
@@ -107,5 +119,20 @@ func _get_configuration_warnings() -> PackedStringArray:
 func _find_manager() -> Node:
 	if not is_inside_tree():
 		return null
+	var scene_root := get_tree().current_scene
+	if scene_root != null:
+		var found := _find_recording_session(scene_root)
+		if found != null:
+			return found
 	return get_tree().root.get_node_or_null("REEEplay")
+
+
+static func _find_recording_session(node: Node) -> Node:
+	if node is REEEplaySession and (node as REEEplaySession).is_recording():
+		return node
+	for child in node.get_children():
+		var hit := _find_recording_session(child)
+		if hit != null:
+			return hit
+	return null
 

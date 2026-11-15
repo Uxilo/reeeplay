@@ -112,3 +112,4 @@ static func _resolve_recorder(recorder_or_session: Variant) -> REEEplayRecorder:
 	if recorder_or_session is REEEplaySession:
 		return (recorder_or_session as REEEplaySession).recorder
 	return null
+

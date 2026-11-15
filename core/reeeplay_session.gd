@@ -15,6 +15,7 @@ signal recording_saved(path: String, error: int)
 @export var rate_policy: REEEplayRatePolicy = null
 @export var auto_start_on_ready: bool = false
 @export var auto_save_on_exit: bool = false
+@export var auto_discover_tracked: bool = true
 
 var recorder: REEEplayRecorder = REEEplayRecorder.new()
 var last_recording: REEEplayRecording = null
@@ -81,8 +82,40 @@ func start_recording(preset_or_kind: Variant = null, options: Dictionary = {}) -
 	_sync_process_mode()
 	var rec := recorder.begin(options)
 	last_recording = rec
+	if auto_discover_tracked:
+		discover_and_track_scene()
+		_connect_dynamic_tracked_listener()
 	recording_started.emit(rec)
 	return rec
+
+
+func discover_and_track_scene() -> int:
+	if not is_inside_tree():
+		return 0
+	var count := 0
+	for n in get_tree().get_nodes_in_group(&"reeeplay_tracked"):
+		if n is REEEplayTracked:
+			var tr := n as REEEplayTracked
+			if tr.auto_track and tr.register_now_with(self, true) > 0:
+				count += 1
+	return count
+
+
+func _connect_dynamic_tracked_listener() -> void:
+	if not is_inside_tree():
+		return
+	var tree := get_tree()
+	if not tree.node_added.is_connected(_on_tree_node_added):
+		tree.node_added.connect(_on_tree_node_added)
+
+
+func _on_tree_node_added(node: Node) -> void:
+	if not auto_discover_tracked or not recorder.is_recording:
+		return
+	if node is REEEplayTracked:
+		var tr := node as REEEplayTracked
+		if tr.auto_track:
+			tr.register_now_with(self)
 
 
 func stop_recording(save_path: String = "", compress: bool = true) -> REEEplayRecording:

@@ -938,6 +938,35 @@ func _test_killcam_diff_and_dock_timeline() -> void:
 	dock._on_diff_vs_sample()
 	_assert(dock._rec_output.text.contains("REEEplay Diff"), "Dock Diff vs Sample should output REEEplayDiff summary")
 
+	# 4. 1-Click Auto-Setup Scene & order-independent REEEplaySession auto-discovery
+	var auto_root := Node3D.new()
+	auto_root.name = "AutoScene"
+	var hero := CharacterBody3D.new()
+	hero.name = "Hero"
+	var skel := Skeleton3D.new()
+	skel.name = "Skeleton3D"
+	hero.add_child(skel)
+	var cam := Camera3D.new()
+	cam.name = "MainCam"
+	auto_root.add_child(hero)
+	auto_root.add_child(cam)
+
+	var setup_res := REEEplayAuthoring.auto_setup_scene(auto_root)
+	_assert(bool(setup_res.get("session_created", false)), "Auto-Setup should create REEEplaySession")
+	_assert((setup_res.get("tracked_added", []) as Array).size() == 2, "Auto-Setup should track Hero + MainCam")
+	var setup_res2 := REEEplayAuthoring.auto_setup_scene(auto_root)
+	_assert(not bool(setup_res2.get("session_created", true)), "Auto-Setup should not duplicate REEEplaySession")
+	_assert((setup_res2.get("tracked_added", []) as Array).is_empty(), "Auto-Setup should skip already-tracked nodes")
+
+	root.add_child(auto_root)
+	var auto_sess := setup_res.get("session", null) as REEEplaySession
+	auto_sess.start_recording(REEEplayPreset.Kind.SINGLEPLAYER)
+	auto_sess.recorder.capture_tick()
+	var auto_rec := auto_sess.stop_recording()
+	_assert(auto_rec.entities.size() >= 2, "REEEplaySession should auto-discover REEEplayTracked nodes in scene")
+	root.remove_child(auto_root)
+	auto_root.free()
+
 	root.remove_child(dock)
 	dock.free()
 	root.remove_child(kc)

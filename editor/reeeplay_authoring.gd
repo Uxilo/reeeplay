@@ -71,6 +71,91 @@ static func find_skeleton_near(node: Node) -> Skeleton3D:
 	return null
 
 
+## One-click scene setup: ensures a REEEplaySession (auto-start/save/discover) and attaches REEEplayTracked to actors.
+static func auto_setup_scene(scene_root: Node) -> Dictionary:
+	var result := {
+		"session_created": false,
+		"session": null,
+		"tracked_added": [] as Array[String],
+		"tracked_existing": 0,
+	}
+	if scene_root == null:
+		return result
+
+	var session := _find_existing_session(scene_root)
+	if session == null:
+		session = REEEplaySession.new()
+		session.name = "REEEplaySession"
+		session.auto_start_on_ready = true
+		session.auto_save_on_exit = true
+		session.auto_discover_tracked = true
+		scene_root.add_child(session)
+		session.owner = scene_root
+		result["session_created"] = true
+	result["session"] = session
+
+	var candidates: Array[Node] = []
+	_collect_auto_track_candidates(scene_root, candidates)
+	for node in candidates:
+		var existing := find_tracked_for_node(node)
+		if existing != null:
+			result["tracked_existing"] = int(result["tracked_existing"]) + 1
+			continue
+		var tracked := REEEplayTracked.new()
+		tracked.name = "REEEplayTracked"
+		tracked.display_name = node.name
+		tracked.auto_track = true
+		if node is Skeleton3D:
+			tracked.custom_channels = REEEplayChannelPresets.transform_3d()
+			tracked.custom_channels.append_array(REEEplayChannelPresets.skeleton_pose())
+		elif node is Camera3D:
+			tracked.custom_channels = REEEplayChannelPresets.camera_3d()
+		elif node is Camera2D:
+			tracked.custom_channels = REEEplayChannelPresets.camera_2d()
+		elif node is Node3D:
+			tracked.custom_channels = REEEplayChannelPresets.transform_3d()
+			if find_skeleton_near(node) != null:
+				tracked.custom_channels.append_array(REEEplayChannelPresets.skeleton_pose())
+		elif node is Node2D:
+			tracked.custom_channels = REEEplayChannelPresets.transform_2d()
+		node.add_child(tracked)
+		tracked.owner = scene_root
+		(result["tracked_added"] as Array[String]).append(node.name)
+
+	return result
+
+
+static func _find_existing_session(node: Node) -> REEEplaySession:
+	if node is REEEplaySession:
+		return node as REEEplaySession
+	for child in node.get_children():
+		var hit := _find_existing_session(child)
+		if hit != null:
+			return hit
+	return null
+
+
+static func _collect_auto_track_candidates(node: Node, out: Array[Node]) -> void:
+	if node == null or node is REEEplayStage or node is REEEplayStage2D:
+		return
+	var is_actor := (
+		node is CharacterBody3D
+		or node is RigidBody3D
+		or node is CharacterBody2D
+		or node is RigidBody2D
+		or node is Camera3D
+		or node is Camera2D
+	)
+	if is_actor:
+		out.append(node)
+		return
+	if node is Skeleton3D:
+		out.append(node)
+		return
+	for child in node.get_children():
+		_collect_auto_track_candidates(child, out)
+
+
 ## Computes readiness checks, resolved rate inheritance, and bandwidth estimate for a REEEplayTracked node.
 static func diagnose_tracked(tracked: REEEplayTracked) -> Dictionary:
 	var checks: Array[Dictionary] = []

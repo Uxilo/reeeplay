@@ -518,6 +518,14 @@ func _lookup_entity_id(target_or_id: Variant) -> int:
 
 
 func _infer_default_channels(target: Node) -> Array[REEEplayChannel]:
+	if target is Skeleton3D:
+		var out := REEEplayChannelPresets.transform_3d(preset.default_vector3_codec)
+		out.append_array(REEEplayChannelPresets.skeleton_pose())
+		return out
+	if target is Camera3D:
+		return REEEplayChannelPresets.camera_3d()
+	if target is Camera2D:
+		return REEEplayChannelPresets.camera_2d()
 	if target is Node3D:
 		return REEEplayChannelPresets.transform_3d(preset.default_vector3_codec)
 	if target is Node2D:

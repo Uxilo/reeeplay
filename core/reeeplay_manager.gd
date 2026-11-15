@@ -13,21 +13,27 @@ var _last_scene_path: String = ""
 
 func _ready() -> void:
 	REEEplaySettings.register()
-	event_registry = REEEplayEventRegistry.new(true)
-	default_session = REEEplaySession.new()
-	default_session.name = "DefaultSession"
-	add_child(default_session)
-
-	default_session.recording_started.connect(func(r: REEEplayRecording) -> void: recording_started.emit(r))
-	default_session.recording_stopped.connect(func(r: REEEplayRecording) -> void: recording_stopped.emit(r))
-	default_session.recording_saved.connect(func(p: String, e: int) -> void: recording_saved.emit(p, e))
+	if event_registry == null:
+		event_registry = REEEplayEventRegistry.new(true)
+	_ensure_session()
 
 	if is_inside_tree():
 		get_tree().node_added.connect(_on_tree_changed_check)
 
 
-func get_session() -> REEEplaySession:
+func _ensure_session() -> REEEplaySession:
+	if default_session == null or not is_instance_valid(default_session):
+		default_session = REEEplaySession.new()
+		default_session.name = "DefaultSession"
+		add_child(default_session)
+		default_session.recording_started.connect(func(r: REEEplayRecording) -> void: recording_started.emit(r))
+		default_session.recording_stopped.connect(func(r: REEEplayRecording) -> void: recording_stopped.emit(r))
+		default_session.recording_saved.connect(func(p: String, e: int) -> void: recording_saved.emit(p, e))
 	return default_session
+
+
+func get_session() -> REEEplaySession:
+	return _ensure_session()
 
 
 func create_session(parent: Node = null) -> REEEplaySession:
@@ -40,7 +46,7 @@ func create_session(parent: Node = null) -> REEEplaySession:
 
 
 func start_recording(preset_or_kind: Variant = null, options: Dictionary = {}) -> REEEplayRecording:
-	return default_session.start_recording(preset_or_kind, options)
+	return _ensure_session().start_recording(preset_or_kind, options)
 
 
 func stop_recording(auto_save_override: Variant = null) -> REEEplayRecording:
@@ -49,7 +55,7 @@ func stop_recording(auto_save_override: Variant = null) -> REEEplayRecording:
 	if auto_save_override is String:
 		path = str(auto_save_override)
 		do_save = not path.is_empty()
-	var rec := default_session.stop_recording("")
+	var rec := _ensure_session().stop_recording("")
 	if do_save and rec != null:
 		if path.is_empty():
 			path = build_default_save_path(rec)
@@ -69,7 +75,7 @@ func register_archetype(archetype: REEEplayArchetype) -> void:
 
 
 func track(target: Node, archetype_id: StringName = &"", options: Dictionary = {}) -> int:
-	return default_session.track(target, archetype_id, options)
+	return _ensure_session().track(target, archetype_id, options)
 
 
 func untrack(target_or_id: Variant) -> void:

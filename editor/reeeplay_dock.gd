@@ -307,10 +307,13 @@ func _build_simple_setup_box() -> VBoxContainer:
 
 	var s1_btns := HBoxContainer.new()
 	s1_btns.add_theme_constant_override(&"separation", 4)
-	_simple_add_session_btn = _btn("+ Add Scene Recorder", func() -> void: _on_create_session_node(true), &"Play",
+	var auto_scene_btn := _btn("Auto-Setup Scene", _on_auto_setup_scene, &"Tools",
+		"One-click setup: adds REEEplaySession (auto-start & save) and attaches REEEplayTracked to characters, physics bodies, skeletons, and cameras in this scene.")
+	_simple_add_session_btn = _btn("+ Add Recorder", func() -> void: _on_create_session_node(true), &"Play",
 		"Adds a REEEplaySession that auto-starts on Play and auto-saves on Exit.")
 	_simple_select_session_btn = _btn("Select Recorder", _on_select_scene_session, &"Node",
 		"Selects the scene's REEEplaySession in the Scene Tree.")
+	s1_btns.add_child(auto_scene_btn)
 	s1_btns.add_child(_simple_add_session_btn)
 	s1_btns.add_child(_simple_select_session_btn)
 	s1.add_child(s1_btns)
@@ -1148,6 +1151,23 @@ func _on_select_scene_session() -> void:
 		return
 	_pinned_target = sess
 	_on_focus_active_target()
+	refresh_selection()
+
+
+func _on_auto_setup_scene() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root() if Engine.is_editor_hint() else null
+	if scene_root == null:
+		if _simple_setup_output != null:
+			_simple_setup_output.text = "[color=#f5c242]Open a scene first to run Auto-Setup.[/color]"
+		return
+	var res := REEEplayAuthoring.auto_setup_scene(scene_root)
+	var added: Array = res.get("tracked_added", [])
+	var existing_count := int(res.get("tracked_existing", 0))
+	var sess_msg := "Added REEEplaySession (auto-start & save)" if bool(res.get("session_created", false)) else "REEEplaySession already present"
+	if _simple_setup_output != null:
+		_simple_setup_output.text = "[color=#6be689]Auto-Setup complete:[/color] %s | +%d tracked (%s) | %d already tracked." % [
+			sess_msg, added.size(), ", ".join(added) if not added.is_empty() else "none", existing_count
+		]
 	refresh_selection()
 
 
